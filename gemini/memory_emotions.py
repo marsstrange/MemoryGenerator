@@ -11,6 +11,12 @@ import time
 # ============================================
 GEMINI_API_KEY = "AIzaSyC-EB9WADDlvmoVdyfqJe6hpxFgxgwGGjw"
 
+# ============================================
+# VIDEO GENERATION TOGGLE (costs money!)
+# Set to False to disable video generation
+# ============================================
+ENABLE_VIDEO_GENERATION = True
+
 # Sound effect labels file (relative to this script's location)
 SOUND_LABELS_FILE = os.path.join(os.path.dirname(__file__), "sound_effect_labels.txt")
 
@@ -215,18 +221,23 @@ def main():
     for sound in sound_effects:
         print(f"   - {sound}")
     
-    # Step 2: Generate video with Gemini Veo
-    video_path = generate_video_with_gemini(prompt_text)
-    
-    if video_path is None:
-        print("\nCould not generate video. Exiting.")
-        return
+    # Step 2: Generate video with Gemini Veo (if enabled)
+    video_path = None
+    if ENABLE_VIDEO_GENERATION:
+        video_path = generate_video_with_gemini(prompt_text)
+        
+        if video_path is None:
+            print("\nCould not generate video. Exiting.")
+            return
+    else:
+        print("\n[VIDEO GENERATION DISABLED - set ENABLE_VIDEO_GENERATION = True to enable]")
     
     # Step 3: Send sounds to SuperCollider (triggers audio)
     send_to_supercollider(sound_effects)
     
     # Step 4: Play video fullscreen (no audio - SC handles sound)
-    play_fullscreen(video_path)
+    if video_path:
+        play_fullscreen(video_path)
     
     print("\n" + "=" * 60)
     print("Done!")
