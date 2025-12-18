@@ -1,5 +1,8 @@
 s.boot;
 
+// Load SynthDefs from calm_synthdefs.scd in the same directory as main.scd
+"calm_synthdefs.scd".loadRelative;
+
 ~classInstances = Dictionary.new; // a dictionary to store class instances
 ~buffers = Dictionary.new; // a dictionary to store buffers
 
@@ -37,7 +40,7 @@ s.boot;
 			loop: 1, //loop
 			doneAction: 0 // don't auto-free
         );
-        sig * 0.8
+        sig * 0.4
     }.play;
 
     ^synth;
@@ -92,12 +95,51 @@ s.boot;
     synth;
 };
 
+~calmClass = {
+    var env = IdentityDictionary.new;
+
+    env[\group] = Group.head(s);
+
+    env[\pad]   = Synth.tail(env[\group], \calmPad,  [\amp, 0.18]);
+    env[\noise] = Synth.tail(env[\group], \calmNoise, [\amp, 0.05]);
+
+    env[\clock] = TempoClock.default;
+
+	env[\plucks] = Pbind(
+        \instrument, \calmPluck,
+        \scale,      Scale.minor,
+        \root,       0,
+        \octave,     Pwrand([4, 5], [0.7, 0.3], inf),
+        \degree,     Pwhite(0, 7, inf),
+        \dur,        Pwhite(1.5, 4.0, inf),
+        \rel,        Pwhite(4.0, 9.0, inf),
+        \amp,        Pwhite(0.04, 0.10, inf)
+    ).play(env[\clock], target: env[\group]);
+
+    env.bells = Pbind(
+        \instrument, \calmBell,
+        \scale,      Scale.minor,
+        \root,       -12,
+        \octave,     Pwrand([5, 6], [0.8, 0.2], inf),
+        \degree,     Pwhite(0, 7, inf),
+        \dur,        Pwhite(6.0, 14.0, inf),
+        \rel,        Pwhite(5.0, 12.0, inf),
+        \amp,        Pwhite(0.03, 0.08, inf)
+    ).play(env[\clock], target: env[\group]);
+
+    env;  // returned & stored in ~classInstances["calm"]
+};
+
 // Map class names to their corresponding functions
 ~classMap = Dictionary.newFrom([
+	// places
     "water", ~waterClass,
     "city", ~cityClass,
     "forest", ~forestClass,
-    "wind", ~windClass
+    "wind", ~windClass,
+
+	//moods
+	"calm",  ~calmClass
 ]);
 
 // OSC Responder
@@ -130,6 +172,34 @@ OSCdef(\classReceiver, {
 n = NetAddr("127.0.0.1", 57120);
 n.sendMsg('/class', 'water');
 n.sendMsg('/class', 'city');
+n.sendMsg('/class', 'calm');
+
+
+// Stopping
 
 // To stop the OSC responder:
 OSCdef(\classReceiver).free;
+
+// To stop calm
+// Add this new class definition
+~stopCalmClass = {
+    var calm = ~classInstances["calm"]; // Get the stored calm environment
+
+    if(calm.notNil) {
+        // Stop patterns if they exist
+        calm[\plucks].tryPerform(\stop);
+        calm[\bells].tryPerform(\stop);
+
+        // Free group if it exists
+        calm[\group].tryPerform(\free);
+
+        // Remove from ~classInstances so it's not stopped again
+        ~classInstances.removeAt("calm");
+
+        "Calm system stopped.".postln;
+    } {
+        "No calm instance running to stop.".postln;
+    };
+};
+
+~stopCalmClass.value;
