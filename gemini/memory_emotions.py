@@ -11,8 +11,8 @@ import time
 # ============================================
 GEMINI_API_KEY = "AIzaSyC-EB9WADDlvmoVdyfqJe6hpxFgxgwGGjw"
 
-# Sound effect labels file
-SOUND_LABELS_FILE = "sound_effect_labels.txt"
+# Sound effect labels file (relative to this script's location)
+SOUND_LABELS_FILE = os.path.join(os.path.dirname(__file__), "sound_effect_labels.txt")
 
 # SuperCollider OSC settings
 SC_IP = "127.0.0.1"
