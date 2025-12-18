@@ -1,0 +1,7 @@
+# Sound Effect Class Labels
+# These match SuperCollider classes in SC_audio_and_effects.scd
+
+water
+city
+forest
+wind
