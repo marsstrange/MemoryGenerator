@@ -116,7 +116,7 @@ s.boot;
         \amp,        Pwhite(0.04, 0.10, inf)
     ).play(env[\clock], target: env[\group]);
 
-    env.bells = Pbind(
+    env[\bells] = Pbind(
         \instrument, \calmBell,
         \scale,      Scale.minor,
         \root,       -12,
