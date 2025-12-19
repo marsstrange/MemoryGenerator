@@ -4,7 +4,7 @@
 import os
 
 # API Key - Get free from: https://aistudio.google.com/apikey
-GEMINI_API_KEY = "AIzaSyC-EB9WADDlvmoVdyfqJe6hpxFgxgwGGjw"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # ============================================
 # FEATURE TOGGLES
