@@ -10,6 +10,7 @@ from config import (
     ENABLE_YOLO_DETECTION,
     ENABLE_GEMINI_SOUNDS
 )
+
 from gemini_client import GeminiClient
 from yolo_detector import YOLODetector
 from sound_controller import SoundController
