@@ -142,26 +142,78 @@ s.boot;
 	"calm",  ~calmClass
 ]);
 
-// OSC Responder
-OSCdef(\classReceiver, {
+
+// OSC Responder for STARTING sounds
+OSCdef(\classStarter, {
     arg msg, time, addr, recvPort;
-    var className;
+    var className = msg[1].asString.toLower;
 
-    // Extract class name from OSC message
-    className = msg[1].asString.toLower;
+    ("Received OSC /class: " ++ className).postln;
 
-    ("Received OSC message: " ++ className).postln;
+    if(~classMap.includesKey(className)) {
+        // If already playing, stop it first to avoid overlapping
+        if(~classInstances[className].notNil) {
+            ~stopClass.(className);
+        };
 
-    // Check if class exists in our map
-    if(~classMap.includesKey(className), {
-        // Create instance and play sample
         ~classInstances[className] = ~classMap[className].value;
-        ("Created instance of: " ++ className).postln;
-    }, {
+        ("Started: " ++ className).postln;
+    } {
         ("Class not found: " ++ className).postln;
-    });
+    };
+}, '/class');
 
-}, '/class'); // OSC address pattern
+// OSC Responder for STOPPING sounds
+~stopClass = { |name|
+    var key  = name.asString.toLower;
+    var inst = ~classInstances[key];
+
+    if(inst.isNil) {
+        ("Nothing running to stop for: " ++ key).postln;
+        ^nil;
+    };
+
+    // Case 1: Complex (calm) - Dictionary/Environment with group + patterns
+    if(inst.isKindOf(Dictionary) or: { inst.isKindOf(Environment) }) {
+        // Stop patterns (plucks, bells)
+        inst[\plucks] !? { inst[\plucks].stop };
+        inst[\bells]  !? { inst[\bells].stop };
+
+        // Free the entire group (kills pad, noise, and all pattern synths)
+        inst[\group] !? { inst[\group].freeAll };
+
+        ~classInstances.removeAt(key);
+        ("Stopped complex: " ++ key).postln;
+        ^inst;
+    };
+
+    // Case 2: Simple Synth (water, city, forest, wind)
+    if(inst.isKindOf(Synth)) {
+        inst.free;  // free the synth immediately
+        ~classInstances.removeAt(key);
+        ("Stopped sample: " ++ key).postln;
+        ^inst;
+    };
+
+    // Case 3: Unknown - just try to free it
+    inst.tryPerform(\free);
+    ~classInstances.removeAt(key);
+    ("Stopped (unknown type): " ++ key).postln;
+    inst;
+};
+
+// The OSC Responder for /stop
+// This is what actually "listens" for the command from Python
+OSCdef(\classStopper, {
+    arg msg, time, addr, recvPort;
+    var className = msg[1].asString.toLower;
+
+    ("Received OSC /stop: " ++ className).postln;
+
+    // Call the function above
+    ~stopClass.value(className);
+
+}, '/stop');
 
 "OSC Receiver ready on port 57120, listening to /class".postln;
 "Send OSC messages with format: /class <classname>".postln;
@@ -178,28 +230,14 @@ n.sendMsg('/class', 'calm');
 // Stopping
 
 // To stop the OSC responder:
-OSCdef(\classReceiver).free;
+//OSCdef(\classReceiver).free;
 
-// To stop calm
-// Add this new class definition
-~stopCalmClass = {
-    var calm = ~classInstances["calm"]; // Get the stored calm environment
+// Stop a specific sample:
+n.sendMsg('/stop', 'water');  // Stop rain
+n.sendMsg('/stop', 'calm');   // Stop calm
 
-    if(calm.notNil) {
-        // Stop patterns if they exist
-        calm[\plucks].tryPerform(\stop);
-        calm[\bells].tryPerform(\stop);
+~classInstances.postln;
+~classInstances["water"].postln;
 
-        // Free group if it exists
-        calm[\group].tryPerform(\free);
-
-        // Remove from ~classInstances so it's not stopped again
-        ~classInstances.removeAt("calm");
-
-        "Calm system stopped.".postln;
-    } {
-        "No calm instance running to stop.".postln;
-    };
-};
-
-~stopCalmClass.value;
+x = ~waterClass.value;
+x.postln;                  // should print a Synth
