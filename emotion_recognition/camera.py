@@ -1,4 +1,6 @@
 import os
+import sys
+import time
 import cv2
 import torch
 import torch.nn as nn
@@ -7,6 +9,14 @@ from PIL import Image
 import numpy as np
 from pythonosc import udp_client
 from hand_gesture import HandGestureDetector
+
+# Painting selector lives one level up
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "painting_selector"))
+try:
+    from selector import PaintingSelector
+    SELECTOR_AVAILABLE = True
+except ImportError:
+    SELECTOR_AVAILABLE = False
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 CHECKPOINT = os.path.join(BASE_DIR, "checkpoints", "best_model.pth")
@@ -20,8 +30,6 @@ COLORS = {
     "sad":      (255, 100, 0),
     "surprise": (0,   255, 255),
 }
-
-# VA coordinates for each emotion — used for the 2D plot overlay
 VA_COORDS = {
     "angry":    (-0.8,  0.8),
     "disgust":  (-0.7,  0.2),
@@ -31,6 +39,8 @@ VA_COORDS = {
     "sad":      (-0.6, -0.6),
     "surprise": ( 0.1,  0.9),
 }
+
+PAINTING_INTERVAL = 20.0  # seconds between painting switches
 
 if torch.backends.mps.is_available():
     DEVICE = torch.device("mps")
@@ -48,25 +58,18 @@ TRANSFORM = transforms.Compose([
 
 
 class EmotionModel(nn.Module):
-    """ResNet50 + two heads: classification and VA regression."""
     def __init__(self):
         super().__init__()
         backbone = models.resnet50(weights=None)
         self.features = nn.Sequential(*list(backbone.children())[:-1])
         feat_dim = 2048
         self.cls_head = nn.Sequential(
-            nn.Dropout(0.4),
-            nn.Linear(feat_dim, 256),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(256, 7),
+            nn.Dropout(0.4), nn.Linear(feat_dim, 256), nn.ReLU(),
+            nn.Dropout(0.3), nn.Linear(256, 7),
         )
         self.va_head = nn.Sequential(
-            nn.Dropout(0.3),
-            nn.Linear(feat_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 2),
-            nn.Tanh(),
+            nn.Dropout(0.3), nn.Linear(feat_dim, 64), nn.ReLU(),
+            nn.Linear(64, 2), nn.Tanh(),
         )
 
     def forward(self, x):
@@ -87,10 +90,10 @@ def predict(model, face_img):
     with torch.no_grad():
         cls_out, va_out = model(tensor)
         probs = torch.softmax(cls_out, dim=1)[0]
-    idx      = probs.argmax().item()
-    valence  = va_out[0, 0].item()
-    arousal  = va_out[0, 1].item()
-    return EMOTIONS[idx], probs[idx].item(), valence, arousal
+    idx     = probs.argmax().item()
+    valence = va_out[0, 0].item()
+    arousal = va_out[0, 1].item()
+    return EMOTIONS[idx], probs[idx].item(), valence, arousal, probs.cpu().numpy()
 
 
 def draw_va_plot(frame, valence, arousal, size=220, margin=12):
@@ -102,117 +105,135 @@ def draw_va_plot(frame, valence, arousal, size=220, margin=12):
     cx = (x0 + x1) // 2
     cy = (y0 + y1) // 2
 
-    # Semi-transparent background
     overlay = frame.copy()
     cv2.rectangle(overlay, (x0 - 4, y0 - 4), (x1 + 4, y1 + 20), (15, 15, 15), -1)
     cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
 
-    # Quadrant shading (subtle)
     for qx, qy, col in [
-        (x0, y0, (30, 20, 20)),   # top-left:  negative + excited
-        (cx, y0, (20, 30, 20)),   # top-right: positive + excited
-        (x0, cy, (20, 20, 30)),   # bot-left:  negative + calm
-        (cx, cy, (25, 25, 25)),   # bot-right: positive + calm
+        (x0, y0, (30, 20, 20)), (cx, y0, (20, 30, 20)),
+        (x0, cy, (20, 20, 30)), (cx, cy, (25, 25, 25)),
     ]:
         overlay2 = frame.copy()
         cv2.rectangle(overlay2, (qx, qy), (qx + size//2, qy + size//2), col, -1)
         cv2.addWeighted(overlay2, 0.3, frame, 0.7, 0, frame)
 
-    # Grid lines
     cv2.line(frame, (x0, cy), (x1, cy), (70, 70, 70), 1)
     cv2.line(frame, (cx, y0), (cx, y1), (70, 70, 70), 1)
-
-    # Axis labels
-    cv2.putText(frame, "-V",    (x0 + 2, cy - 4),  cv2.FONT_HERSHEY_SIMPLEX, 0.32, (90, 90, 90), 1)
-    cv2.putText(frame, "+V",    (x1 - 18, cy - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (90, 90, 90), 1)
-    cv2.putText(frame, "+A",    (cx + 3, y0 + 11), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (90, 90, 90), 1)
-    cv2.putText(frame, "-A",    (cx + 3, y1 - 3),  cv2.FONT_HERSHEY_SIMPLEX, 0.32, (90, 90, 90), 1)
+    cv2.putText(frame, "-V", (x0 + 2, cy - 4),  cv2.FONT_HERSHEY_SIMPLEX, 0.32, (90, 90, 90), 1)
+    cv2.putText(frame, "+V", (x1 - 18, cy - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (90, 90, 90), 1)
+    cv2.putText(frame, "+A", (cx + 3, y0 + 11), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (90, 90, 90), 1)
+    cv2.putText(frame, "-A", (cx + 3, y1 - 3),  cv2.FONT_HERSHEY_SIMPLEX, 0.32, (90, 90, 90), 1)
 
     def to_px(v, a):
-        px = int(cx + v * (size // 2 - 8))
-        py = int(cy - a * (size // 2 - 8))  # flip: up = higher arousal
-        return px, py
+        return int(cx + v * (size//2 - 8)), int(cy - a * (size//2 - 8))
 
-    # Emotion reference dots
     for emotion, (v, a) in VA_COORDS.items():
         ex, ey = to_px(v, a)
         col = COLORS[emotion]
         cv2.circle(frame, (ex, ey), 4, col, -1)
-        cv2.putText(frame, emotion[:3], (ex + 5, ey + 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.28, col, 1)
+        cv2.putText(frame, emotion[:3], (ex + 5, ey + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.28, col, 1)
 
-    # Current VA point
     px, py = to_px(valence, arousal)
     cv2.circle(frame, (px, py), 7, (255, 255, 255), -1)
     cv2.line(frame, (px - 10, py), (px + 10, py), (255, 255, 255), 1)
     cv2.line(frame, (px, py - 10), (px, py + 10), (255, 255, 255), 1)
 
-    # Closest 2 emotions by Euclidean distance in VA space
-    dists = sorted(VA_COORDS.items(), key=lambda e: (valence - e[1][0])**2 + (arousal - e[1][1])**2)
-    closest_label = "~  " + "  /  ".join(e for e, _ in dists[:2])
-    cv2.putText(frame, closest_label, (x0, y1 + 16),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
+    dists = sorted(VA_COORDS.items(), key=lambda e: (valence-e[1][0])**2 + (arousal-e[1][1])**2)
+    cv2.putText(frame, "~  " + "  /  ".join(e for e, _ in dists[:2]),
+                (x0, y1 + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
+
+
+def draw_painting_info(frame, painting, style, time_left):
+    """Bottom-left overlay: current painting info + style + countdown."""
+    fh = frame.shape[0]
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, fh - 70), (500, fh), (15, 15, 15), -1)
+    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+
+    if painting:
+        artist = painting.get("artist", "")[:30]
+        title  = painting.get("title",  "")[:35]
+        cv2.putText(frame, f"{artist} — {title}",
+                    (8, fh - 46), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
+    cv2.putText(frame, f"Style: {style}",
+                (8, fh - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 220, 255), 1)
+    cv2.putText(frame, f"next in {int(time_left)}s",
+                (8, fh - 4),  cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1)
 
 
 def main():
     print(f"Device: {DEVICE}")
-    print("Loading model...")
+    print("Loading emotion model...")
     model = load_model()
     print("Model loaded.")
 
-    osc          = udp_client.SimpleUDPClient("127.0.0.1", 12000)
-    face_cascade = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    # Painting selector (optional — skipped if not yet precomputed)
+    selector = None
+    if SELECTOR_AVAILABLE:
+        paintings_db = os.path.join(BASE_DIR, "..", "painting_selector", "data", "paintings.pkl")
+        if os.path.exists(paintings_db):
+            selector = PaintingSelector()
+        else:
+            print("paintings.pkl not found — run painting_selector/precompute.py first")
+
+    osc           = udp_client.SimpleUDPClient("127.0.0.1", 12000)
+    face_cascade  = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     hand_detector = HandGestureDetector()
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Cannot open camera.")
         return
-
     print("Camera open. Press Q to quit.")
+
+    # State for painting selection
+    probs_buffer      = []        # accumulate face probs over 20s window
+    last_select_time  = time.time()
+    current_painting  = None
+    last_static       = None      # debounce static gestures for feedback
+    last_dynamic      = None      # debounce dynamic gestures for style cycling
+    feedback_given    = False     # only one feedback per painting showing
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
+        now      = time.time()
+        elapsed  = now - last_select_time
+        time_left = max(0.0, PAINTING_INTERVAL - elapsed)
+
+        # ── face emotion ──────────────────────────────────────────────────────
         gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
 
         for (x, y, w, h) in faces:
-            face_crop             = frame[y:y+h, x:x+w]
-            emotion, conf, V, A   = predict(model, face_crop)
-            color                 = COLORS[emotion]
+            face_crop                      = frame[y:y+h, x:x+w]
+            emotion, conf, V, A, probs_np  = predict(model, face_crop)
+            color                          = COLORS[emotion]
+            probs_buffer.append(probs_np)
 
-            # Send emotion label + continuous VA over OSC
             osc.send_message("/emotion",  emotion)
             osc.send_message("/valence",  float(V))
             osc.send_message("/arousal",  float(A))
 
-            # Draw bounding box
             cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
-
-            # Emotion label
             label = f"{emotion}  {conf*100:.0f}%"
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
             cv2.rectangle(frame, (x, y - th - 10), (x + tw + 8, y), color, -1)
-            cv2.putText(frame, label, (x + 4, y - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-
-            # Valence / Arousal text under face box
-            va_label = f"V {V:+.2f}  A {A:+.2f}"
-            cv2.putText(frame, va_label, (x, y + h + 22),
+            cv2.putText(frame, label, (x + 4, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(frame, f"V {V:+.2f}  A {A:+.2f}", (x, y + h + 22),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
-
             draw_va_plot(frame, V, A)
 
-        # Hand gesture detection
+        # ── hand gesture ──────────────────────────────────────────────────────
         hand = hand_detector.detect(frame)
         if hand:
-            osc.send_message("/gesture",     hand["static"]  or "none")
-            osc.send_message("/dynamic",     hand["dynamic"] or "none")
+            static  = hand["static"]  or ""
+            dynamic = hand["dynamic"] or ""
+
+            osc.send_message("/gesture",     static  or "none")
+            osc.send_message("/dynamic",     dynamic or "none")
             osc.send_message("/palm_x",      float(hand["palm_x"]))
             osc.send_message("/palm_y",      float(hand["palm_y"]))
             osc.send_message("/hand_size",   float(hand["hand_size"]))
@@ -220,17 +241,68 @@ def main():
             osc.send_message("/spread",      float(hand["spread"]))
             osc.send_message("/wrist_angle", float(hand["wrist_angle"]))
 
-            # Gesture overlay — top left
-            static  = hand["static"]  or ""
-            dynamic = hand["dynamic"] or ""
             cv2.putText(frame, f"gesture: {static}",  (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.putText(frame, f"dynamic: {dynamic}", (10, 58),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
+            if selector and current_painting:
+                # Static gesture → painting feedback (once per gesture change)
+                if static != last_static and static in ("thumbs_up", "thumbs_down", "ok") and not feedback_given:
+                    selector.feedback(current_painting["id"], gesture=static)
+                    feedback_given = True
+                    osc.send_message("/feedback", static)
+
+                # Dynamic gesture → style navigation (once per gesture change)
+                if dynamic != last_dynamic:
+                    if dynamic == "swipe_up":
+                        style = selector.next_style()
+                        osc.send_message("/style", style)
+                    elif dynamic == "swipe_down":
+                        style = selector.prev_style()
+                        osc.send_message("/style", style)
+
+            last_static  = static
+            last_dynamic = dynamic
+        else:
+            last_static  = None
+            last_dynamic = None
+
+        # ── painting selection every 20s ──────────────────────────────────────
+        if selector and elapsed >= PAINTING_INTERVAL:
+            if current_painting and not feedback_given:
+                # Passive approval — shown without rejection
+                selector.feedback(current_painting["id"], seconds_shown=PAINTING_INTERVAL)
+
+            # Use averaged probs over the window, fallback to neutral
+            if probs_buffer:
+                avg_probs = np.mean(probs_buffer, axis=0)
+            else:
+                avg_probs = np.ones(7) / 7.0
+
+            current_painting = selector.select(avg_probs)
+            osc.send_message("/painting/path",   current_painting["path"])
+            osc.send_message("/painting/style",  current_painting["style"])
+            osc.send_message("/painting/artist", current_painting["artist"])
+            osc.send_message("/painting/title",  current_painting["title"])
+
+            probs_buffer     = []
+            last_select_time = now
+            feedback_given   = False
+
+        # ── painting info overlay ─────────────────────────────────────────────
+        if selector:
+            draw_painting_info(frame, current_painting, selector.current_style, time_left)
+
         cv2.imshow("Emotion Recognizer  |  Q to quit", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
+
+    if selector:
+        # Passive approval for last painting if no feedback given
+        if current_painting and not feedback_given:
+            selector.feedback(current_painting["id"], seconds_shown=elapsed)
+        selector.save_scores()
 
     cap.release()
     cv2.destroyAllWindows()
