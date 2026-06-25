@@ -6,6 +6,7 @@ from torchvision import transforms, models
 from PIL import Image
 import numpy as np
 from pythonosc import udp_client
+from hand_gesture import HandGestureDetector
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 CHECKPOINT = os.path.join(BASE_DIR, "checkpoints", "best_model.pth")
@@ -162,6 +163,7 @@ def main():
     osc          = udp_client.SimpleUDPClient("127.0.0.1", 12000)
     face_cascade = cv2.CascadeClassifier(
         cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    hand_detector = HandGestureDetector()
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -205,6 +207,26 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
 
             draw_va_plot(frame, V, A)
+
+        # Hand gesture detection
+        hand = hand_detector.detect(frame)
+        if hand:
+            osc.send_message("/gesture",     hand["static"]  or "none")
+            osc.send_message("/dynamic",     hand["dynamic"] or "none")
+            osc.send_message("/palm_x",      float(hand["palm_x"]))
+            osc.send_message("/palm_y",      float(hand["palm_y"]))
+            osc.send_message("/hand_size",   float(hand["hand_size"]))
+            osc.send_message("/pinch",       float(hand["pinch"]))
+            osc.send_message("/spread",      float(hand["spread"]))
+            osc.send_message("/wrist_angle", float(hand["wrist_angle"]))
+
+            # Gesture overlay — top left
+            static  = hand["static"]  or ""
+            dynamic = hand["dynamic"] or ""
+            cv2.putText(frame, f"gesture: {static}",  (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame, f"dynamic: {dynamic}", (10, 58),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         cv2.imshow("Emotion Recognizer  |  Q to quit", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
