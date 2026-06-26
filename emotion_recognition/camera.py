@@ -143,22 +143,26 @@ def draw_va_plot(frame, valence, arousal, size=220, margin=12):
                 (x0, y1 + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
 
 
-def draw_painting_info(frame, painting, style, time_left):
-    """Bottom-left overlay: current painting info + style + countdown."""
+def draw_painting_info(frame, painting, style, time_left, score=0.0):
+    """Bottom-left overlay: current painting info + style + score + countdown."""
     fh = frame.shape[0]
     overlay = frame.copy()
-    cv2.rectangle(overlay, (0, fh - 70), (500, fh), (15, 15, 15), -1)
+    cv2.rectangle(overlay, (0, fh - 88), (500, fh), (15, 15, 15), -1)
     cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
 
     if painting:
         artist = painting.get("artist", "")[:30]
         title  = painting.get("title",  "")[:35]
         cv2.putText(frame, f"{artist} — {title}",
-                    (8, fh - 46), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
+                    (8, fh - 64), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
+
+    score_color = (80, 220, 80) if score > 0 else (80, 80, 220) if score < 0 else (150, 150, 150)
     cv2.putText(frame, f"Style: {style}",
-                (8, fh - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 220, 255), 1)
+                (8, fh - 42), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 220, 255), 1)
+    cv2.putText(frame, f"score: {score:+.1f}",
+                (8, fh - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, score_color, 1)
     cv2.putText(frame, f"next in {int(time_left)}s",
-                (8, fh - 4),  cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1)
+                (200, fh - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1)
 
 
 def main():
@@ -172,9 +176,13 @@ def main():
     if SELECTOR_AVAILABLE:
         paintings_db = os.path.join(BASE_DIR, "..", "painting_selector", "data", "paintings.pkl")
         if os.path.exists(paintings_db):
-            selector = PaintingSelector()
+            try:
+                selector = PaintingSelector()
+                print(f"Selector loaded: {len(selector.ids)} paintings")
+            except Exception as e:
+                print(f"Selector failed to load: {e}")
         else:
-            print("paintings.pkl not found — run painting_selector/precompute.py first")
+            print(f"paintings.pkl not found at {paintings_db}")
 
     osc           = udp_client.SimpleUDPClient("127.0.0.1", 12000)
     face_cascade  = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
@@ -188,11 +196,11 @@ def main():
 
     # State for painting selection
     probs_buffer      = []        # accumulate face probs over 20s window
-    last_select_time  = time.time()
+    last_select_time  = time.time() - PAINTING_INTERVAL  # select immediately on first frame
     current_painting  = None
-    last_static       = None      # debounce static gestures for feedback
-    last_dynamic      = None      # debounce dynamic gestures for style cycling
-    feedback_given    = False     # only one feedback per painting showing
+    last_static        = None
+    last_dynamic       = None
+    last_feedback_time = {}  # gesture → timestamp, 5s cooldown per gesture type
 
     while True:
         ret, frame = cap.read()
@@ -247,11 +255,12 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
             if selector and current_painting:
-                # Static gesture → painting feedback (once per gesture change)
-                if static != last_static and static in ("thumbs_up", "thumbs_down", "ok") and not feedback_given:
-                    selector.feedback(current_painting["id"], gesture=static)
-                    feedback_given = True
-                    osc.send_message("/feedback", static)
+                # Static gesture → feedback with 5s cooldown per gesture type
+                if static != last_static and static in ("thumbs_up", "thumbs_down", "ok"):
+                    if now - last_feedback_time.get(static, 0) >= 5.0:
+                        selector.feedback(current_painting["id"], gesture=static)
+                        osc.send_message("/feedback", static)
+                        last_feedback_time[static] = now
 
                 # Dynamic gesture → style navigation (once per gesture change)
                 if dynamic != last_dynamic:
@@ -270,17 +279,21 @@ def main():
 
         # ── painting selection every 20s ──────────────────────────────────────
         if selector and elapsed >= PAINTING_INTERVAL:
-            if current_painting and not feedback_given:
-                # Passive approval — shown without rejection
-                selector.feedback(current_painting["id"], seconds_shown=PAINTING_INTERVAL)
-
             # Use averaged probs over the window, fallback to neutral
             if probs_buffer:
                 avg_probs = np.mean(probs_buffer, axis=0)
             else:
                 avg_probs = np.ones(7) / 7.0
 
-            current_painting = selector.select(avg_probs)
+            try:
+                current_painting = selector.select(avg_probs)
+                print(f"Selected: {current_painting['artist']} — {current_painting['title']}")
+            except Exception as e:
+                print(f"Select failed: {e}")
+                current_painting = None
+            if current_painting is None:
+                last_select_time = now
+                continue
             osc.send_message("/painting/path",   current_painting["path"])
             osc.send_message("/painting/style",  current_painting["style"])
             osc.send_message("/painting/artist", current_painting["artist"])
@@ -288,20 +301,25 @@ def main():
 
             probs_buffer     = []
             last_select_time = now
-            feedback_given   = False
+
+            # Show painting in separate window
+            img = cv2.imread(current_painting["path"])
+            if img is not None:
+                h, w = img.shape[:2]
+                scale = 600 / max(h, w)
+                img = cv2.resize(img, (int(w * scale), int(h * scale)))
+                cv2.imshow("Painting", img)
 
         # ── painting info overlay ─────────────────────────────────────────────
         if selector:
-            draw_painting_info(frame, current_painting, selector.current_style, time_left)
+            score = selector.personal_scores.get(current_painting["id"], 0.0) if current_painting else 0.0
+            draw_painting_info(frame, current_painting, selector.current_style, time_left, score)
 
         cv2.imshow("Emotion Recognizer  |  Q to quit", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     if selector:
-        # Passive approval for last painting if no feedback given
-        if current_painting and not feedback_given:
-            selector.feedback(current_painting["id"], seconds_shown=elapsed)
         selector.save_scores()
 
     cap.release()

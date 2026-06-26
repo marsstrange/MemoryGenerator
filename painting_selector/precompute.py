@@ -13,10 +13,11 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import CLIPProcessor, CLIPModel
 
-EMOTIONS_TSV = "./data/WikiArt-Emotions/WikiArt-Emotions-All.tsv"
-INFO_TSV     = "./data/WikiArt-Emotions/WikiArt-info.tsv"
-IMG_DIR      = "./data/images"
-OUT_FILE     = "./data/paintings.pkl"
+_HERE        = os.path.dirname(os.path.abspath(__file__))
+EMOTIONS_TSV = os.path.join(_HERE, "data", "WikiArt-Emotions", "WikiArt-Emotions-All.tsv")
+INFO_TSV     = os.path.join(_HERE, "data", "WikiArt-Emotions", "WikiArt-info.tsv")
+IMG_DIR      = os.path.join(_HERE, "data", "images")
+OUT_FILE     = os.path.join(_HERE, "data", "paintings.pkl")
 CLIP_MODEL   = "openai/clip-vit-base-patch32"
 BATCH_SIZE   = 32
 
@@ -45,9 +46,7 @@ def main():
     processor  = CLIPProcessor.from_pretrained(CLIP_MODEL)
     clip_model.eval()
 
-    emo_df  = pd.read_csv(EMOTIONS_TSV, sep="\t")
-    info_df = pd.read_csv(INFO_TSV, sep="\t")[["ID", "Artist", "Title", "Year"]]
-    df      = emo_df.merge(info_df, on="ID")
+    df = pd.read_csv(EMOTIONS_TSV, sep="\t")
 
     # Normalise art rating to [0, 1]
     df["ave_art_rating"] = pd.to_numeric(df["Ave. art rating"], errors="coerce").fillna(3.0)

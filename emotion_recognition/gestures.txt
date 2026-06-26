@@ -4,6 +4,7 @@ open        — index + middle + ring + pinky extended (thumb state ignored)
 fist        — index + middle + ring + pinky curled (thumb state ignored)
 thumbs_up   — thumb extended and away from palm, all other fingers curled; also triggered by thumb + pinky
 thumbs_down — same as thumbs_up but thumb pointing downward
+ok          — middle + ring + pinky extended, index curled to touch thumb tip (pinch < 35% palm width)
 point       — index extended, others curled
 peace       — index + middle extended, others curled
 unknown     — none of the above matched

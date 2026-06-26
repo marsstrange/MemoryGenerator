@@ -3,8 +3,9 @@ import json
 import pickle
 import numpy as np
 
-PAINTINGS_FILE = "./data/paintings.pkl"
-SCORES_FILE    = "./data/personal_scores.json"
+_HERE          = os.path.dirname(os.path.abspath(__file__))
+PAINTINGS_FILE = os.path.join(_HERE, "data", "paintings.pkl")
+SCORES_FILE    = os.path.join(_HERE, "data", "personal_scores.json")
 
 FACE_EMOTIONS = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
 
@@ -26,8 +27,9 @@ FACE_TO_WIKI = {
 }
 
 DIVERSITY_WEIGHT = 0.3   # how much to penalise visually similar recent paintings
-HISTORY_SIZE     = 5     # how many recent paintings to compare against
-TOP_K            = 20    # candidates from emotion matching before diversity re-rank
+HISTORY_SIZE     = 20    # how many recent paintings to exclude
+TOP_K            = 50    # candidates from emotion matching before diversity re-rank
+TEMPERATURE      = 0.3   # sampling temperature: lower = closer to argmax, higher = more random
 
 
 class PaintingSelector:
@@ -48,11 +50,7 @@ class PaintingSelector:
         self.styles    = ["All"] + sorted(set(p["style"] for p in self.paintings.values() if p["style"]))
         self.style_idx = 0
 
-        # Personal scores — persists across sessions
         self.personal_scores = {}
-        if os.path.exists(SCORES_FILE):
-            with open(SCORES_FILE) as f:
-                self.personal_scores = json.load(f)
 
         self.history          = []   # recently shown painting IDs
         self.current_painting = None
@@ -99,8 +97,15 @@ class PaintingSelector:
         else:
             mask = np.array([self.paintings[i]["style"] == self.current_style for i in self.ids])
 
+        # Exclude recently shown paintings
+        recent = set(self.history[-HISTORY_SIZE:])
+        exclude = np.array([self.ids[i] in recent for i in range(len(self.ids))])
+        mask = mask & ~exclude
+
         indices = np.where(mask)[0]
-        if len(indices) == 0:
+        if len(indices) == 0:  # fallback: ignore history but keep style
+            indices = np.where(~exclude)[0]
+        if len(indices) == 0:  # fallback: ignore everything
             indices = np.arange(len(self.ids))
 
         # Emotion similarity (cosine — vectors are pre-normalised)
@@ -131,8 +136,12 @@ class PaintingSelector:
             clip_penalty = np.zeros(k)
 
         final_scores = candidate_scores[top_local] - DIVERSITY_WEIGHT * clip_penalty
-        best_local   = np.argmax(final_scores)
-        best_id      = self.ids[top_idx[best_local]]
+        # Weighted random sampling so lower-ranked paintings still get shown
+        shifted = final_scores - final_scores.max()
+        weights = np.exp(shifted / TEMPERATURE)
+        weights /= weights.sum()
+        best_local = np.random.choice(len(weights), p=weights)
+        best_id    = self.ids[top_idx[best_local]]
 
         self.history.append(best_id)
         if len(self.history) > HISTORY_SIZE * 2:
@@ -167,7 +176,7 @@ class PaintingSelector:
             score += 0.5
         elif gesture is None and seconds_shown >= 20:
             score += 0.2
-        self.personal_scores[painting_id] = score
+        self.personal_scores[painting_id] = max(-3.0, min(3.0, score))
 
     def save_scores(self):
         os.makedirs(os.path.dirname(SCORES_FILE), exist_ok=True)

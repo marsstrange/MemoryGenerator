@@ -100,6 +100,13 @@ class HandGestureDetector:
                 return "thumbs_up" if lm[4].y < lm[0].y else "thumbs_down"
         if not index and not middle and not ring and not pinky: return "fist"
 
+        # ok: index curled to touch thumb tip, middle+ring+pinky extended
+        if middle and ring and pinky and not index:
+            pinch   = math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y)
+            palm_w  = math.hypot(lm[5].x - lm[17].x, lm[5].y - lm[17].y)
+            if pinch < palm_w * 0.35:
+                return "ok"
+
         if index and not middle and not ring and not pinky:           return "point"
         if index and middle and not ring and not pinky:               return "peace"
         if thumb and not index and not middle and not ring and pinky: return "thumbs_up"

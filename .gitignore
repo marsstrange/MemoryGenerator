@@ -69,3 +69,4 @@ painting_selector/data/paintings.pkl
 painting_selector/data/personal_scores.json
 painting_selector/embeddings/
 painting_selector/checkpoints/
+emotion_recognition/checkpoints/
