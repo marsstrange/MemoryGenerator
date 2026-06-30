@@ -59,7 +59,7 @@ python3 precompute.py
 cd ..
 ```
 
-### 6. Train the face emotion model (~20–30 min on Apple Silicon)
+### 6. Train the face emotion model (~20–30 min on Apple Silicon) -- NOT NEEDED AS WELL AS THE FILE WITH WEIGHTS IS UPLOADED (best_model.pth)
 ```
 cd emotion_recognition
 python3 train.py

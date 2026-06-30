@@ -69,5 +69,3 @@ target/
 painting_selector/data/images/
 painting_selector/data/personal_scores.json
 painting_selector/embeddings/
-painting_selector/checkpoints/
-emotion_recognition/checkpoints/
