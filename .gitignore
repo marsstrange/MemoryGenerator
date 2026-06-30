@@ -25,6 +25,8 @@ var/
 .installed.cfg
 *.egg
 
+uni/
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -65,7 +67,6 @@ target/
 
 # Painting selector — generated/large files
 painting_selector/data/images/
-painting_selector/data/paintings.pkl
 painting_selector/data/personal_scores.json
 painting_selector/embeddings/
 painting_selector/checkpoints/

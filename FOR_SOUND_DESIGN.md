@@ -22,6 +22,14 @@ conda create -n uni python=3.11
 conda activate uni
 pip install -r requirements.txt
 ```
+Alternative with pyenv: 
+
+```
+pyenv local 3.11.9
+python -m venv uni
+.\uni\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
 
 ### 3. Download the WikiArt Emotions dataset
 Go to https://saifmohammad.com/WebPages/wikiartemotions.html and download the annotations.  
@@ -41,7 +49,10 @@ python3 download_images.py
 cd ..
 ```
 
-### 5. Precompute emotion + CLIP embeddings (~10–15 min, runs on GPU/MPS if available)
+For Windows: use $python$ instead od $python3$
+
+
+### 5. Precompute emotion + CLIP embeddings (~10–15 min, runs on GPU/MPS if available) - NOT NEEDED ANYMORE (the result is already uploaded to the repo, paintings.pkg file)
 ```
 cd painting_selector
 python3 precompute.py
