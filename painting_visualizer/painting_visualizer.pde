@@ -12,6 +12,25 @@ String  paintingPath = "";
 float   valence = 0, arousal = 0;
 float   sValence = 0, sArousal = 0;
 
+// ── palm-driven flow ────────────────────────────────────────────────────────
+float   palmX = 0.5, palmY = 0.5;      // last known palm position (0-1, raw camera-frame coords)
+float   palmDX = 0, palmDY = 0;        // raw frame-to-frame delta (this is the "movement" signal)
+float   sPalmDX = 0, sPalmDY = 0;      // smoothed delta -> what actually drives particle direction
+int     lastHandMsgTime = 0;           // millis() of last /palm_x, /palm_y or /hand_size received
+final float PALM_GAIN    = 60.0;       // scales tiny per-frame deltas up to a usable force
+final float PALM_PUSH    = 1.5;        // steady-state push ~= PALM_PUSH*10 px/frame (see vx/vy decay in update()) — deliberately strong so a swipe is obvious
+final int   PALM_TIMEOUT = 200;        // ms of silence => treat hand as gone, push/zoom relax to neutral
+
+// ── palm-distance zoom ──────────────────────────────────────────────────────
+float   handSize = 0.0;                // raw /hand_size (~0.1 far - 0.4 close, 0 = no hand)
+float   sZoom = 1.0;                   // smoothed zoom actually applied around canvas centre
+
+// ── fast-approach scatter ───────────────────────────────────────────────────
+float   scatterEnergy = 0;             // 0-1, spikes on a fast approach then decays
+final float SCATTER_DELTA_THRESHOLD = 0.03; // per-message hand_size jump counted as "fast"
+final float SCATTER_STRENGTH        = 6.0;  // outward push at full scatterEnergy
+final float SCATTER_DECAY           = 0.90; // per-frame decay of the burst
+
 float[] gradAngle;
 float[] gradMag;
 
@@ -34,6 +53,22 @@ void draw() {
   sArousal = lerp(sArousal, arousal, 0.04);
   sValence = lerp(sValence, valence, 0.04);
 
+  boolean handPresent = millis() - lastHandMsgTime <= PALM_TIMEOUT;
+  if (!handPresent) {
+    palmDX = 0;
+    palmDY = 0;
+  }
+  sPalmDX = lerp(sPalmDX, palmDX, 0.5);
+  sPalmDY = lerp(sPalmDY, palmDY, 0.5);
+  float palmForceX = constrain(sPalmDX * PALM_GAIN, -1, 1);
+  float palmForceY = constrain(sPalmDY * PALM_GAIN, -1, 1);
+
+  // closer palm (bigger hand_size) => zoom in; no hand => relax back to 1.0
+  float targetZoom = handPresent ? map(handSize, 0.1, 0.4, 0.7, 1.6) : 1.0;
+  sZoom = lerp(sZoom, constrain(targetZoom, 0.5, 2.0), 0.05);
+
+  scatterEnergy *= SCATTER_DECAY;   // burst fades on its own; oscEvent re-tops it up while approach stays fast
+
   if (needsRespawn && painting != null) {
     spawnFromBox();
     needsRespawn = false;
@@ -43,10 +78,15 @@ void draw() {
   noStroke();
   rect(0, 0, width, height);
 
+  pushMatrix();
+  translate(width / 2.0, height / 2.0);
+  scale(sZoom);
+  translate(-width / 2.0, -height / 2.0);
   for (PixelParticle p : pxParticles) {
-    p.update();
+    p.update(palmForceX, palmForceY);
     p.display();
   }
+  popMatrix();
 
   if (selecting) {
     noFill();
@@ -117,6 +157,25 @@ void oscEvent(OscMessage msg) {
   }
   else if (addr.equals("/valence")) valence = msg.get(0).floatValue();
   else if (addr.equals("/arousal")) arousal = msg.get(0).floatValue();
+  else if (addr.equals("/palm_x")) {
+    float nx = msg.get(0).floatValue();
+    palmDX = nx - palmX;          // delta since last message = instantaneous x-movement
+    palmX  = nx;
+    lastHandMsgTime = millis();   // mark hand as "seen" so draw() doesn't decay push/zoom to neutral
+  }
+  else if (addr.equals("/palm_y")) {
+    float ny = msg.get(0).floatValue();
+    palmDY = ny - palmY;          // delta since last message = instantaneous y-movement
+    palmY  = ny;
+    lastHandMsgTime = millis();
+  }
+  else if (addr.equals("/hand_size")) {
+    float ns    = msg.get(0).floatValue();
+    float delta = ns - handSize;             // growth rate = how fast the palm is approaching
+    handSize = ns;
+    lastHandMsgTime = millis();
+    if (delta > SCATTER_DELTA_THRESHOLD) scatterEnergy = 1.0;
+  }
 }
 
 void loadPainting() {
@@ -145,7 +204,9 @@ class PixelParticle {
     life    = random(maxLife);
   }
 
-  void update() {
+  // palmForceX/Y: unit-ish vector of the palm's current movement direction,
+  // magnitude ~0 when the palm is still or off-screen (see draw())
+  void update(float palmForceX, float palmForceY) {
     int sx  = constrain((int)(x / width  * (painting.width  - 1)), 0, painting.width  - 1);
     int sy  = constrain((int)(y / height * (painting.height - 1)), 0, painting.height - 1);
     int idx = sy * painting.width + sx;
@@ -167,8 +228,16 @@ class PixelParticle {
 
     float speed = (0.6 + abs(sArousal) * 1.8) * lerp(1.0, 0.25, mag);
 
-    vx = vx * 0.9 + (edgeX + noiseX + springX) * speed * 0.1;
-    vy = vy * 0.9 + (edgeY + noiseY + springY) * speed * 0.1;
+    // radial push away from screen centre, ~0 unless a fast approach just fired scatterEnergy
+    float cx = x - width / 2.0, cy = y - height / 2.0;
+    float cd = sqrt(cx * cx + cy * cy);
+    float scatterX = cd > 1 ? (cx / cd) * scatterEnergy * SCATTER_STRENGTH : 0;
+    float scatterY = cd > 1 ? (cy / cd) * scatterEnergy * SCATTER_STRENGTH : 0;
+
+    // palm term is kept out of the "* speed * 0.1" scaling (which shrinks near high-gradient
+    // painting areas) so a swipe always gives the same strong, obvious push, ~0 when palm is still
+    vx = vx * 0.9 + (edgeX + noiseX + springX) * speed * 0.1 + palmForceX * PALM_PUSH + scatterX;
+    vy = vy * 0.9 + (edgeY + noiseY + springY) * speed * 0.1 + palmForceY * PALM_PUSH + scatterY;
 
     x += vx; y += vy;
     life--;
