@@ -184,7 +184,16 @@ def main():
         else:
             print(f"paintings.pkl not found at {paintings_db}")
 
-    osc           = udp_client.SimpleUDPClient("127.0.0.1", 12000)
+    # Separate ports per receiver: two processes can't reliably share one UDP port
+    # (whichever socket the OS delivers a packet to "wins," so both listening at once
+    # means each side randomly drops messages meant for the other).
+    osc_processing = udp_client.SimpleUDPClient("127.0.0.1", 12000)
+    osc_sc         = udp_client.SimpleUDPClient("127.0.0.1", 12001)
+
+    def send_osc(address, value):
+        osc_processing.send_message(address, value)
+        osc_sc.send_message(address, value)
+
     face_cascade  = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     hand_detector = HandGestureDetector()
 
@@ -221,9 +230,9 @@ def main():
             color                          = COLORS[emotion]
             probs_buffer.append(probs_np)
 
-            osc.send_message("/emotion",  emotion)
-            osc.send_message("/valence",  float(V))
-            osc.send_message("/arousal",  float(A))
+            send_osc("/emotion",  emotion)
+            send_osc("/valence",  float(V))
+            send_osc("/arousal",  float(A))
 
             cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
             label = f"{emotion}  {conf*100:.0f}%"
@@ -240,14 +249,14 @@ def main():
             static  = hand["static"]  or ""
             dynamic = hand["dynamic"] or ""
 
-            osc.send_message("/gesture",     static  or "none")
-            osc.send_message("/dynamic",     dynamic or "none")
-            osc.send_message("/palm_x",      float(hand["palm_x"]))
-            osc.send_message("/palm_y",      float(hand["palm_y"]))
-            osc.send_message("/hand_size",   float(hand["hand_size"]))
-            osc.send_message("/pinch",       float(hand["pinch"]))
-            osc.send_message("/spread",      float(hand["spread"]))
-            osc.send_message("/wrist_angle", float(hand["wrist_angle"]))
+            send_osc("/gesture",     static  or "none")
+            send_osc("/dynamic",     dynamic or "none")
+            send_osc("/palm_x",      float(hand["palm_x"]))
+            send_osc("/palm_y",      float(hand["palm_y"]))
+            send_osc("/hand_size",   float(hand["hand_size"]))
+            send_osc("/pinch",       float(hand["pinch"]))
+            send_osc("/spread",      float(hand["spread"]))
+            send_osc("/wrist_angle", float(hand["wrist_angle"]))
 
             cv2.putText(frame, f"gesture: {static}",  (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
@@ -259,17 +268,17 @@ def main():
                 if static != last_static and static in ("thumbs_up", "thumbs_down", "ok"):
                     if now - last_feedback_time.get(static, 0) >= 5.0:
                         selector.feedback(current_painting["id"], gesture=static)
-                        osc.send_message("/feedback", static)
+                        send_osc("/feedback", static)
                         last_feedback_time[static] = now
 
                 # Dynamic gesture → style navigation (once per gesture change)
                 if dynamic != last_dynamic:
                     if dynamic == "swipe_up":
                         style = selector.next_style()
-                        osc.send_message("/style", style)
+                        send_osc("/style", style)
                     elif dynamic == "swipe_down":
                         style = selector.prev_style()
-                        osc.send_message("/style", style)
+                        send_osc("/style", style)
 
             last_static  = static
             last_dynamic = dynamic
@@ -294,10 +303,10 @@ def main():
             if current_painting is None:
                 last_select_time = now
                 continue
-            osc.send_message("/painting/path",   current_painting["path"])
-            osc.send_message("/painting/style",  current_painting["style"])
-            osc.send_message("/painting/artist", current_painting["artist"])
-            osc.send_message("/painting/title",  current_painting["title"])
+            send_osc("/painting/path",   current_painting["path"])
+            send_osc("/painting/style",  current_painting["style"])
+            send_osc("/painting/artist", current_painting["artist"])
+            send_osc("/painting/title",  current_painting["title"])
 
             probs_buffer     = []
             last_select_time = now
