@@ -19,38 +19,120 @@ if (~plucks.notNil)   { ~plucks.stop };
 if (~bells.notNil)    { ~bells.stop };
 if (~handWatchdog.notNil) { ~handWatchdog.stop };
 
-~padGroup = Group.new;
+~padGroup     = Group.new;
+~scapeGroup   = nil;   // reset so ~switchScape below doesn't try to fade/free a stale group
+~currentScapeName = nil;
 
 // ── mood state, read live by the Pbind patterns below via Pfunc ────────────
 ~mood = (valence: 0.0, arousal: 0.0, emotion: \neutral);
 
-// ── tier 1: ambient bed — reacts continuously to valence/arousal ───────────
-~pad      = Synth(\calmPad,   [\amp, 0.18], ~padGroup);
-~noiseBed = Synth(\calmNoise, [\amp, 0.05], ~padGroup);
-
 ~clock = TempoClock.default;
 
-~plucks = Pbind(
-    \instrument, \calmPluck,
-    \scale,   Pfunc({ if(~mood.valence >= 0) { Scale.major } { Scale.minor } }),
-    \root,    0,
-    \octave,  Pwrand([4, 5], [0.7, 0.3], inf),
-    \degree,  Pwhite(0, 7, inf),
-    \dur,     Pfunc({ (2.6 - (~mood.arousal.max(0) * 1.8)).max(0.5) }),  // faster when aroused
-    \rel,     Pwhite(4.0, 9.0, inf),
-    \amp,     Pfunc({ 0.04 + (~mood.arousal.max(0) * 0.06) }),
-).play(~clock, target: ~padGroup);
+// ── tier 1: ambient bed — reacts continuously to valence/arousal, and swaps
+// between "soundscapes" (different pad, texture bed, and one-shot voice — not
+// just a different scale on the same instruments) depending on which family the
+// current painting's /painting/style belongs to ────────────────────────────
 
-~bells = Pbind(
-    \instrument, \calmBell,
-    \scale,   Pfunc({ if(~mood.valence >= 0) { Scale.major } { Scale.minor } }),
-    \root,    -12,
-    \octave,  Pwrand([5, 6], [0.8, 0.2], inf),
-    \degree,  Pwhite(0, 7, inf),
-    \dur,     Pwhite(6.0, 14.0, inf),
-    \rel,     Pwhite(5.0, 12.0, inf),
-    \amp,     Pwhite(0.03, 0.08, inf),
-).play(~clock, target: ~padGroup);
+// each entry spawns its own pad + noise bed + patterns into a fresh group and
+// reassigns the shared ~pad/~plucks/~bells, then returns the group so
+// ~switchScape can track it; the noise bed lives inside the group too, so it
+// fades and frees along with everything else on a scape switch
+~scapeMap = Dictionary.newFrom([
+    \classical, {
+        var g = Group.tail(~padGroup);
+        ~pad      = Synth(\shimmerPad, [\amp, 0.2, \valence, ~mood.valence, \arousal, ~mood.arousal], g);
+        ~noiseBed = Synth(\calmNoise,  [\amp, 0.05], g);
+        ~plucks = Pbind(
+            \instrument, \calmPluck,
+            \scale,   Pfunc({ if(~mood.valence >= 0) { Scale.major } { Scale.minor } }),
+            \root,    0,
+            \octave,  Pwrand([4, 5], [0.7, 0.3], inf),
+            \degree,  Pwhite(0, 7, inf),
+            \dur,     Pfunc({ (2.6 - (~mood.arousal.max(0) * 1.8)).max(0.5) }),  // faster when aroused
+            \rel,     Pwhite(4.0, 9.0, inf),
+            \amp,     Pfunc({ 0.04 + (~mood.arousal.max(0) * 0.06) }),
+        ).play(~clock, target: g);
+        ~bells = Pbind(
+            \instrument, \calmBell,
+            \scale,   Pfunc({ if(~mood.valence >= 0) { Scale.major } { Scale.minor } }),
+            \root,    -12,
+            \octave,  Pwrand([5, 6], [0.8, 0.2], inf),
+            \degree,  Pwhite(0, 7, inf),
+            \dur,     Pwhite(6.0, 14.0, inf),
+            \rel,     Pwhite(5.0, 12.0, inf),
+            \amp,     Pwhite(0.03, 0.08, inf),
+        ).play(~clock, target: g);
+        g;
+    },
+    \expressionist, {
+        var g = Group.tail(~padGroup);
+        ~pad      = Synth(\glitchPad, [\amp, 0.18, \valence, ~mood.valence, \arousal, ~mood.arousal], g);
+        ~noiseBed = Synth(\tenseNoise, [\amp, 0.07], g);
+        // inharmonic metallic hits, not tuned notes — no \scale/\degree, freq is
+        // just the resonance center (see \tenseHit), so this reads as noise-events
+        // rather than a melody, deliberately unlike classical's plucked/bell voice
+        ~plucks = Pbind(
+            \instrument, \tenseHit,
+            \freq,    Pwhite(300, 1200, inf),
+            \dur,     Pwhite(0.15, 0.9, inf),        // fast, agitated
+            \rel,     Pwhite(0.2, 0.8, inf),
+            \amp,     Pwhite(0.08, 0.18, inf),
+        ).play(~clock, target: g);
+        ~bells = Pbind(
+            \instrument, \tenseHit,
+            \freq,    Pwhite(60, 200, inf),          // low, ominous rumbles
+            \dur,     Pwhite(1.0, 3.5, inf),
+            \rel,     Pwhite(1.5, 4.0, inf),
+            \amp,     Pwhite(0.10, 0.20, inf),
+        ).play(~clock, target: g);
+        g;
+    },
+]);
+
+// only the first token before a comma matters for the rare multi-label styles
+// (e.g. "Cubism,Expressionism" -> "Cubism"); anything not listed defaults to \classical
+~styleToScape = Dictionary.newFrom([
+    "Realism",             \classical,
+    "Northern Renaissance", \classical,
+    "Early Renaissance",    \classical,
+    "High Renaissance",     \classical,
+    "Baroque",              \classical,
+    "Rococo",               \classical,
+    "Romanticism",          \classical,
+    "Neoclassicism",        \classical,
+
+    "Expressionism",        \expressionist,
+    "Neo-Expressionism",    \expressionist,
+    "Cubism",               \expressionist,
+    "Surrealism",           \expressionist,
+]);
+
+~resolveScape = { |styleStr|
+    var first = styleStr.split($,)[0];
+    ~styleToScape[first] ?? { \classical };
+};
+
+// crossfades by fading the outgoing pad out (each pad's amp is lagged, see
+// calm_synthdefs.scd) while the incoming pad fades in the same way, then frees the old group
+~switchScape = { |name|
+    if (name != ~currentScapeName and: { ~scapeMap.includesKey(name) }) {
+        var oldGroup = ~scapeGroup;
+
+        ("Switching soundscape -> " ++ name).postln;
+
+        if (oldGroup.notNil) {
+            ~plucks.stop;
+            ~bells.stop;
+            oldGroup.set(\amp, 0);
+            fork { 2.0.wait; oldGroup.free };
+        };
+
+        ~scapeGroup = ~scapeMap[name].value;
+        ~currentScapeName = name;
+    };
+};
+
+~switchScape.(\classical);  // starting scape
 
 // ── tier 2: palm-driven continuous voice ────────────────────────────────────
 // mirrors the Processing particle system: palm_x -> pan, palm_y -> filter,
@@ -100,6 +182,10 @@ OSCdef(\arousalRx, { |msg|
     ~pad.set(\arousal, msg[1]);
 }, '/arousal');
 
+OSCdef(\paintingStyleRx, { |msg|
+    ~switchScape.(~resolveScape.(msg[1].asString));
+}, '/painting/style');
+
 OSCdef(\palmXRx, { |msg|
     ~palm.set(\pan, msg[1].linlin(0, 1, -1, 1), \amp, 0.15);
     ~lastHandTime = Main.elapsedTime;
@@ -135,6 +221,15 @@ OSCdef(\dynamicRx, { |msg|
     { gesture == \swipe_right } { Synth.tail(~padGroup, \calmPluck, [\freq, 700, \amp, 0.1,  \rel, 2]) }
     { gesture == \push        } { Synth.tail(~padGroup, \calmBell,  [\freq, 200, \amp, 0.18, \rel, 4]) };
 }, '/dynamic');
+
+// camera.py sends this from its try/finally on exit — normal quit, crash, or Ctrl+C
+OSCdef(\shutdownRx, { |msg|
+    "Received /shutdown — stopping sound.".postln;
+    if (~padGroup.notNil)     { ~padGroup.free };
+    if (~plucks.notNil)       { ~plucks.stop };
+    if (~bells.notNil)        { ~bells.stop };
+    if (~handWatchdog.notNil) { ~handWatchdog.stop };
+}, '/shutdown');
 
 "Mood-reactive receiver ready on port 12001.".postln;
 

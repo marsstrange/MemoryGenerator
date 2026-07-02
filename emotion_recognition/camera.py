@@ -211,7 +211,8 @@ def main():
     last_dynamic       = None
     last_feedback_time = {}  # gesture → timestamp, 5s cooldown per gesture type
 
-    while True:
+    try:
+      while True:
         ret, frame = cap.read()
         if not ret:
             break
@@ -327,12 +328,15 @@ def main():
         cv2.imshow("Emotion Recognizer  |  Q to quit", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
+    finally:
+      # runs on normal quit, an exception, or Ctrl+C — tells SC to stop the sound
+      osc_sc.send_message("/shutdown", 1)
 
-    if selector:
-        selector.save_scores()
+      if selector:
+          selector.save_scores()
 
-    cap.release()
-    cv2.destroyAllWindows()
+      cap.release()
+      cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
