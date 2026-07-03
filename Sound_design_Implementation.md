@@ -9,9 +9,13 @@ Sound reacts to two independent things at once:
 
 Switching scapes crossfades: the outgoing pad fades out and its group is freed, the incoming pad fades in, driven by `~switchScape` in `SC_mood_reactive.scd`.
 
-Implementation lives in:
-- [`calm_synthdefs.scd`](calm_synthdefs.scd) — the SynthDefs (pads, one-shot voices, noise beds)
-- [`SC_mood_reactive.scd`](SC_mood_reactive.scd) — the OSC receiver, mood state, style→scape lookup, and crossfade logic
+Implementation lives in `audio_playback/`:
+- [`calm_synthdefs.scd`](audio_playback/calm_synthdefs.scd) — the SynthDefs (pads, one-shot voices, noise beds)
+- [`SC_mood_reactive.scd`](audio_playback/SC_mood_reactive.scd) — the OSC receiver, mood state, style→scape lookup, and crossfade logic
+
+All headless launch scripts (SuperCollider *and* Processing, no IDE windows needed) live together in `scripts/`: `run_supercollider.{ps1,bat,sh}`, `run_processing.{ps1,bat,sh}`. `camera.py` auto-launches both on startup via `launch_supercollider()`/`launch_processing()`.
+
+`old_hackathon_pipeline/` holds the separate, unrelated Gemini/YOLO prompt-driven demo (`gemini/` Python code + `SC_audio_and_effects.scd`, its OSC receiver on port 57120) — kept for reference, not part of the mood-reactive system above. It still depends on `calm_synthdefs.scd` in `audio_playback/` (shared SynthDefs), loaded via a `../audio_playback/` relative path.
 
 ## Styles → scapes
 

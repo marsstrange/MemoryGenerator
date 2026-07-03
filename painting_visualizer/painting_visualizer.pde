@@ -109,7 +109,10 @@ void mouseReleased() {
 
 void spawnFromBox() {
   pxParticles.clear();
-  background(0);
+  // draws the actual painting once as the fresh backdrop — the ongoing per-frame black
+  // fade in draw() then lets it slowly dissolve into the particle trails over the next
+  // ~20s, so this sketch alone shows the artwork (no separate Python "Painting" window needed)
+  image(painting, 0, 0);
 
   int x1 = constrain(min(selX1, selX2), 0, width  - 1);
   int x2 = constrain(max(selX1, selX2), 0, width  - 1);

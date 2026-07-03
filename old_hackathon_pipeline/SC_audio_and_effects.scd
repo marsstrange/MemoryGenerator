@@ -1,7 +1,7 @@
 s.boot;
 
-// Load SynthDefs from calm_synthdefs.scd in the same directory as main.scd
-"calm_synthdefs.scd".loadRelative;
+// calm_synthdefs.scd lives in ../audio_playback (shared with the mood-reactive pipeline)
+"../audio_playback/calm_synthdefs.scd".loadRelative;
 
 ~classInstances = Dictionary.new; // a dictionary to store class instances
 ~buffers = Dictionary.new; // a dictionary to store buffers

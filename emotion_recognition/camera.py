@@ -1,6 +1,8 @@
 import os
 import sys
 import time
+import platform
+import subprocess
 import cv2
 import torch
 import torch.nn as nn
@@ -41,6 +43,7 @@ VA_COORDS = {
 }
 
 PAINTING_INTERVAL = 20.0  # seconds between painting switches
+DEBUG_WINDOW = "Emotion Recognizer  |  Q to quit, D to toggle this window"
 
 if torch.backends.mps.is_available():
     DEVICE = torch.device("mps")
@@ -165,7 +168,80 @@ def draw_painting_info(frame, painting, style, time_left, score=0.0):
                 (200, fh - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1)
 
 
+SCRIPTS_DIR = os.path.join(BASE_DIR, "..", "scripts")
+
+
+def _is_process_running(name):
+    """Best-effort check so repeated camera.py runs don't stack up duplicate
+    background processes. If the check itself fails for any reason, assume
+    "not running" -- launching an extra instance is a lesser problem than a
+    crash here preventing the app from starting at all."""
+    try:
+        if platform.system() == "Windows":
+            out = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {name}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return name.lower() in out.stdout.lower()
+        else:
+            out = subprocess.run(["pgrep", "-x", name], capture_output=True, timeout=5)
+            return out.returncode == 0
+    except Exception:
+        return False
+
+
+def launch_supercollider():
+    """Auto-starts the mood-reactive SC script for the current OS, so it doesn't
+    have to be run by hand. Fire-and-forget: doesn't wait for it to boot -- any
+    OSC messages sent before it's ready are just silently dropped, harmlessly."""
+    system = platform.system()
+    proc_name = "sclang.exe" if system == "Windows" else "sclang"
+
+    if _is_process_running(proc_name):
+        print("SuperCollider (sclang) already running -- skipping auto-launch.")
+        return
+
+    try:
+        if system == "Windows":
+            script = os.path.join(SCRIPTS_DIR, "run_supercollider.bat")
+            subprocess.Popen(["cmd", "/c", script])
+        elif system in ("Darwin", "Linux"):
+            script = os.path.join(SCRIPTS_DIR, "run_supercollider.sh")
+            subprocess.Popen(["bash", script])
+        else:
+            print(f"Unrecognized OS '{system}' -- start SuperCollider manually.")
+            return
+        print(f"Launching SuperCollider ({system}): {script}")
+    except Exception as e:
+        print(f"Could not auto-launch SuperCollider: {e}")
+
+
+def launch_processing():
+    """Auto-opens painting_visualizer.pde in whatever app the OS associates with .pde
+    files (the Processing IDE, if installed) for the current OS -- same as
+    double-clicking the file. Does NOT auto-run it: press Run inside Processing
+    yourself once it opens. Fire-and-forget, same as launch_supercollider()."""
+    system = platform.system()
+
+    try:
+        if system == "Windows":
+            script = os.path.join(SCRIPTS_DIR, "run_processing.bat")
+            subprocess.Popen(["cmd", "/c", script])
+        elif system in ("Darwin", "Linux"):
+            script = os.path.join(SCRIPTS_DIR, "run_processing.sh")
+            subprocess.Popen(["bash", script])
+        else:
+            print(f"Unrecognized OS '{system}' -- start Processing manually.")
+            return
+        print(f"Launching Processing sketch ({system}): {script}")
+    except Exception as e:
+        print(f"Could not auto-launch Processing: {e}")
+
+
 def main():
+    launch_supercollider()
+    launch_processing()
+
     print(f"Device: {DEVICE}")
     print("Loading emotion model...")
     model = load_model()
@@ -201,7 +277,12 @@ def main():
     if not cap.isOpened():
         print("Cannot open camera.")
         return
-    print("Camera open. Press Q to quit.")
+    print("Camera open. Press Q to quit, D to toggle this debug window.")
+    # WINDOW_NORMAL (not the default AUTOSIZE) so it can be resized/shrunk programmatically --
+    # unlike AUTOSIZE, it doesn't auto-fit the image, so size it to the camera's native
+    # resolution up front (otherwise it'd open at some small default size instead)
+    cv2.namedWindow(DEBUG_WINDOW, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(DEBUG_WINDOW, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
 
     # State for painting selection
     probs_buffer      = []        # accumulate face probs over 20s window
@@ -210,6 +291,8 @@ def main():
     last_static        = None
     last_dynamic       = None
     last_feedback_time = {}  # gesture → timestamp, 5s cooldown per gesture type
+    show_debug = True  # toggled with 'd' -- painting_visualizer.pde shows the audience-facing
+                        # visuals now, so this debug window can be hidden during an actual showing
 
     try:
       while True:
@@ -314,21 +397,39 @@ def main():
             last_select_time = now
 
             # Show painting in separate window
-            img = cv2.imread(current_painting["path"])
-            if img is not None:
-                h, w = img.shape[:2]
-                scale = 600 / max(h, w)
-                img = cv2.resize(img, (int(w * scale), int(h * scale)))
-                cv2.imshow("Painting", img)
+            # -- disabled: painting_visualizer.pde now draws the painting itself as the
+            # -- particle backdrop, so this separate Python window is redundant (one less
+            # -- window on screen). Kept here in case Processing isn't running.
+            # img = cv2.imread(current_painting["path"])
+            # if img is not None:
+            #     h, w = img.shape[:2]
+            #     scale = 600 / max(h, w)
+            #     img = cv2.resize(img, (int(w * scale), int(h * scale)))
+            #     cv2.imshow("Painting", img)
 
         # ── painting info overlay ─────────────────────────────────────────────
         if selector:
             score = selector.personal_scores.get(current_painting["id"], 0.0) if current_painting else 0.0
             draw_painting_info(frame, current_painting, selector.current_style, time_left, score)
 
-        cv2.imshow("Emotion Recognizer  |  Q to quit", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
+        # cv2.imshow("Emotion Recognizer  |  Q to quit", frame)
+        # if cv2.waitKey(1) & 0xFF == ord("q"):
+        #     break
+        if show_debug:
+            cv2.imshow(DEBUG_WINDOW, frame)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
             break
+        elif key == ord("d"):
+            # shrink to near-nothing rather than destroying the window: with zero cv2
+            # windows open, waitKey can lose OS keyboard focus entirely, and there'd be
+            # no way to press 'd' (or even 'q') again
+            show_debug = not show_debug
+            if show_debug:
+                cv2.resizeWindow(DEBUG_WINDOW, frame.shape[1], frame.shape[0])
+            else:
+                cv2.resizeWindow(DEBUG_WINDOW, 1, 1)
     finally:
       # runs on normal quit, an exception, or Ctrl+C — tells SC to stop the sound
       osc_sc.send_message("/shutdown", 1)
