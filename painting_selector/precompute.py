@@ -90,7 +90,11 @@ def main():
 
             paintings[row["ID"]] = {
                 "path":           os.path.join(IMG_DIR, row["ID"] + ".jpg"),
-                "style":          str(row.get("Style", row.get("Category", ""))),
+                # "Category" is the specific movement (Impressionism, Cubism, ...) — what the
+                # sound design's style->scape mapping expects. "Style" is a much broader bucket
+                # (only 4 values: Modern/Post Renaissance/Renaissance/Contemporary Art) and would
+                # make nearly every painting resolve to the same scape, so it's just the fallback.
+                "style":          str(row.get("Category", row.get("Style", ""))),
                 "artist":         str(row.get("Artist", "")),
                 "title":          str(row.get("Title",  "")),
                 "year":           str(row.get("Year",   "")),

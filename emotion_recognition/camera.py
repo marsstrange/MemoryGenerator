@@ -297,7 +297,8 @@ def main():
 
             try:
                 current_painting = selector.select(avg_probs)
-                print(f"Selected: {current_painting['artist']} — {current_painting['title']}")
+                print(f"Selected: {current_painting['artist']} — {current_painting['title']} "
+                      f"[{current_painting['style']}]")
             except Exception as e:
                 print(f"Select failed: {e}")
                 current_painting = None

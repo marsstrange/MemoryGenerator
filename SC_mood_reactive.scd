@@ -14,6 +14,7 @@ s.waitForBoot({
 
 thisProcess.openUDPPort(12001);
 
+//tears down whatever this script created last time
 if (~padGroup.notNil) { ~padGroup.free };
 if (~plucks.notNil)   { ~plucks.stop };
 if (~bells.notNil)    { ~bells.stop };
@@ -87,10 +88,82 @@ if (~handWatchdog.notNil) { ~handWatchdog.stop };
         ).play(~clock, target: g);
         g;
     },
+    \abstract, {
+        // sparse, low, non-tonal pool — matches driftPad's frequencies rather than a scale
+        var g = Group.tail(~padGroup);
+        var freqs = (36 + [0, 5, 7, 10]).midicps;
+        ~pad      = Synth(\driftPad, [\amp, 0.14, \valence, ~mood.valence, \arousal, ~mood.arousal], g);
+        ~noiseBed = Synth(\driftHum, [\amp, 0.02], g);
+        // very rare, very quiet swells — no \scale/\degree, this scape is mostly silence
+        ~plucks = Pbind(
+            \instrument, \driftTone,
+            \freq,    Prand(freqs, inf),
+            \dur,     Pwhite(10.0, 22.0, inf),
+            \rel,     Pwhite(8.0, 16.0, inf),
+            \amp,     Pwhite(0.04, 0.08, inf),
+        ).play(~clock, target: g);
+        ~bells = Pbind(
+            \instrument, \driftTone,
+            \freq,    Prand(freqs * 2, inf),
+            \dur,     Pwhite(14.0, 28.0, inf),
+            \rel,     Pwhite(10.0, 20.0, inf),
+            \amp,     Pwhite(0.03, 0.06, inf),
+        ).play(~clock, target: g);
+        g;
+    },
+    \impressionist, {
+        // whole-tone pool, matches hazeBank's fixed resonant bank
+        var g = Group.tail(~padGroup);
+        var freqs = (55 + [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]).midicps;
+        ~pad      = Synth(\hazeBank,    [\amp, 0.18, \valence, ~mood.valence, \arousal, ~mood.arousal], g);
+        ~noiseBed = Synth(\hazeShimmer, [\amp, 0.05], g);
+        ~plucks = Pbind(
+            \instrument, \hazeBell,
+            \freq,    Prand(freqs, inf),
+            \dur,     Pwhite(2.0, 5.0, inf),
+            \rel,     Pwhite(4.0, 8.0, inf),
+            \amp,     Pwhite(0.05, 0.12, inf),
+        ).play(~clock, target: g);
+        ~bells = Pbind(
+            \instrument, \hazeBell,
+            \freq,    Prand(freqs * 2, inf),          // an octave up, "high shimmer" voice
+            \dur,     Pwhite(3.0, 7.0, inf),
+            \rel,     Pwhite(5.0, 10.0, inf),
+            \amp,     Pwhite(0.03, 0.08, inf),
+        ).play(~clock, target: g);
+        g;
+    },
+    \pop, {
+        // quantized, pentatonic, and rhythmic — the only scape with a clear steady beat
+        var g = Group.tail(~padGroup);
+        ~pad      = Synth(\popPulse, [\amp, 0.2, \valence, ~mood.valence, \arousal, ~mood.arousal], g);
+        ~noiseBed = Synth(\popHat,   [\amp, 0.04], g);
+        ~plucks = Pbind(
+            \instrument, \popStab,
+            \scale,   Scale.majorPentatonic,
+            \root,    0,
+            \octave,  5,
+            \degree,  Pxrand((0..4), inf),
+            \dur,     Prand([0.25, 0.25, 0.5], inf),
+            \rel,     0.25,
+            \amp,     Pwhite(0.10, 0.18, inf),
+        ).play(~clock, target: g);
+        ~bells = Pbind(
+            \instrument, \popStab,
+            \scale,   Scale.majorPentatonic,
+            \root,    0,
+            \octave,  3,
+            \degree,  Pxrand((0..4), inf),
+            \dur,     Prand([0.5, 1.0], inf),
+            \rel,     0.4,
+            \amp,     Pwhite(0.12, 0.2, inf),
+        ).play(~clock, target: g);
+        g;
+    },
 ]);
 
 // only the first token before a comma matters for the rare multi-label styles
-// (e.g. "Cubism,Expressionism" -> "Cubism"); anything not listed defaults to \classical
+// (e.g. "Cubism,Expressionism" -> "Cubism"); covers all 22 WikiArt style categories now
 ~styleToScape = Dictionary.newFrom([
     "Realism",             \classical,
     "Northern Renaissance", \classical,
@@ -105,6 +178,19 @@ if (~handWatchdog.notNil) { ~handWatchdog.stop };
     "Neo-Expressionism",    \expressionist,
     "Cubism",               \expressionist,
     "Surrealism",           \expressionist,
+
+    "Abstract Art",           \abstract,
+    "Abstract Expressionism", \abstract,
+    "Minimalism",             \abstract,
+    "Color Field Painting",   \abstract,
+    "Lyrical Abstraction",    \abstract,
+    "Art Informel",           \abstract,
+
+    "Impressionism",         \impressionist,
+    "Post-Impressionism",    \impressionist,
+    "Magic Realism",         \impressionist,
+
+    "Pop Art",               \pop,
 ]);
 
 ~resolveScape = { |styleStr|
@@ -183,7 +269,10 @@ OSCdef(\arousalRx, { |msg|
 }, '/arousal');
 
 OSCdef(\paintingStyleRx, { |msg|
-    ~switchScape.(~resolveScape.(msg[1].asString));
+    var style = msg[1].asString;
+    var scape = ~resolveScape.(style);
+    ("Painting style: " ++ style ++ "  ->  scape: " ++ scape).postln;
+    ~switchScape.(scape);
 }, '/painting/style');
 
 OSCdef(\palmXRx, { |msg|
