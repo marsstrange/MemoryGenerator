@@ -14,19 +14,6 @@ s.waitForBoot({
 
 thisProcess.openUDPPort(12001);
 
-//tears down whatever this script created last time
-if (~padGroup.notNil) { ~padGroup.free };
-if (~plucks.notNil)   { ~plucks.stop };
-if (~bells.notNil)    { ~bells.stop };
-if (~handWatchdog.notNil) { ~handWatchdog.stop };
-
-~padGroup     = Group.new;
-~scapeGroup   = nil;   // reset so ~switchScape below doesn't try to fade/free a stale group
-~currentScapeName = nil;
-
-// ── mood state, read live by the Pbind patterns below via Pfunc ────────────
-~mood = (valence: 0.0, arousal: 0.0, emotion: \neutral);
-
 ~clock = TempoClock.default;
 
 // ── tier 1: ambient bed — reacts continuously to valence/arousal, and swaps
@@ -218,8 +205,6 @@ if (~handWatchdog.notNil) { ~handWatchdog.stop };
     };
 };
 
-~switchScape.(\classical);  // starting scape
-
 // ── tier 2: palm-driven continuous voice ────────────────────────────────────
 // mirrors the Processing particle system: palm_x -> pan, palm_y -> filter,
 // hand_size -> proximity (reverb/brightness), matching the visual zoom
@@ -232,20 +217,7 @@ SynthDef(\palmVoice, { |out = 0, pan = 0, cutoff = 1200, amp = 0, room = 0.6|
     Out.ar(out, Pan2.ar(sig, pan.clip(-1, 1)));
 }).add;
 
-~palm = Synth(\palmVoice, [\amp, 0], ~padGroup);
-
-// silences palmVoice if no hand messages arrive for a while (hand left frame)
-~lastHandTime = Main.elapsedTime;
-~handTimeout  = 0.3;
-~handWatchdog = Routine({
-    loop {
-        if ((Main.elapsedTime - ~lastHandTime) > ~handTimeout) { ~palm.set(\amp, 0) };
-        0.1.wait;
-    };
-}).play;
-
-// ── tier 3: one-shot event triggers ─────────────────────────────────────────
-~lastHandSize     = 0;
+~handTimeout      = 0.3;
 ~scatterThreshold = 0.05;  // hand_size jump per message counted as "fast approach"
 
 ~feedbackFreqs = Dictionary.newFrom([
@@ -253,6 +225,53 @@ SynthDef(\palmVoice, { |out = 0, pan = 0, cutoff = 1200, amp = 0, room = 0.6|
     \thumbs_down, 220,
     \ok,          440,
 ]);
+
+// ── (re)build a clean, ready-to-play state ──────────────────────────────────
+// Called once at boot, AND again from /shutdown -- so telling SC to stop the sound
+// doesn't leave ~padGroup/~pad/~palm etc. pointing at freed, dead nodes. Without this,
+// restarting camera.py against the same still-running sclang process (rather than
+// closing and reopening it) would hit the same "node not found" errors we hit before,
+// since every OSCdef references these vars directly.
+~initAudioState = {
+    if (~padGroup.notNil)     { ~padGroup.free };
+    if (~plucks.notNil)       { ~plucks.stop };
+    if (~bells.notNil)        { ~bells.stop };
+    if (~handWatchdog.notNil) { ~handWatchdog.stop };
+
+    ~padGroup         = Group.new;
+    ~scapeGroup       = nil;
+    ~currentScapeName = nil;
+    ~mood             = (valence: 0.0, arousal: 0.0, emotion: \neutral);
+    ~lastHandSize     = 0;
+
+    ~palm = Synth(\palmVoice, [\amp, 0], ~padGroup);
+
+    // silences palmVoice if no hand messages arrive for a while (hand left frame)
+    ~lastHandTime = Main.elapsedTime;
+    ~handWatchdog = Routine({
+        loop {
+            if ((Main.elapsedTime - ~lastHandTime) > ~handTimeout) { ~palm.set(\amp, 0) };
+            0.1.wait;
+        };
+    }).play;
+
+    // Spawn a classical scape just so ~pad/~plucks/~bells/~scapeGroup are valid objects
+    // (avoids nil errors if e.g. /valence arrives before the first real /painting/style),
+    // then immediately silence and stop it and forget we did this by resetting
+    // ~currentScapeName back to nil -- otherwise this "bootstrap" scape would (a) audibly
+    // play on its own right after a /shutdown reset (the group-level amp silence only
+    // covers the continuous pad/noise bed, not the ~plucks/~bells patterns, which keep
+    // firing their own one-shot notes at their own amp regardless), and (b) if the first
+    // *real* painting selection also resolves to \classical, ~switchScape would see no
+    // change and skip fading it back in.
+    ~switchScape.(\classical);
+    ~scapeGroup.set(\amp, 0);
+    ~plucks.stop;
+    ~bells.stop;
+    ~currentScapeName = nil;
+};
+
+~initAudioState.value;
 
 // ── OSC handlers ─────────────────────────────────────────────────────────────
 
@@ -311,13 +330,13 @@ OSCdef(\dynamicRx, { |msg|
     { gesture == \push        } { Synth.tail(~padGroup, \calmBell,  [\freq, 200, \amp, 0.18, \rel, 4]) };
 }, '/dynamic');
 
-// camera.py sends this from its try/finally on exit — normal quit, crash, or Ctrl+C
+// camera.py sends this from its try/finally on exit — normal quit, crash, or Ctrl+C.
+// Fully resets back to a clean, ready state (see ~initAudioState above) rather than just
+// freeing everything, so the next camera.py run works against this same sclang process
+// without needing SC itself restarted.
 OSCdef(\shutdownRx, { |msg|
-    "Received /shutdown — stopping sound.".postln;
-    if (~padGroup.notNil)     { ~padGroup.free };
-    if (~plucks.notNil)       { ~plucks.stop };
-    if (~bells.notNil)        { ~bells.stop };
-    if (~handWatchdog.notNil) { ~handWatchdog.stop };
+    "Received /shutdown — resetting to a clean state.".postln;
+    ~initAudioState.value;
 }, '/shutdown');
 
 "Mood-reactive receiver ready on port 12001.".postln;

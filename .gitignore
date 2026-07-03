@@ -69,3 +69,7 @@ target/
 painting_selector/data/images/
 painting_selector/data/personal_scores.json
 painting_selector/embeddings/
+
+# Per-machine tool paths remembered by scripts/run_*.{ps1,sh} — local to each
+# person's setup, never shared/committed
+scripts/.*_path

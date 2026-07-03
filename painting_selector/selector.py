@@ -26,7 +26,8 @@ FACE_TO_WIKI = {
     "surprise": {"surprise": 1.0, "anticipation": 0.5},
 }
 
-DIVERSITY_WEIGHT = 0.3   # how much to penalise visually similar recent paintings
+DIVERSITY_WEIGHT       = 0.3   # how much to penalise visually similar recent paintings
+STYLE_DIVERSITY_WEIGHT = 0.4   # how much to penalise repeating a recently-shown style
 HISTORY_SIZE     = 20    # how many recent paintings to exclude
 TOP_K            = 50    # candidates from emotion matching before diversity re-rank
 TEMPERATURE      = 0.3   # sampling temperature: lower = closer to argmax, higher = more random
@@ -135,7 +136,29 @@ class PaintingSelector:
         else:
             clip_penalty = np.zeros(k)
 
-        final_scores = candidate_scores[top_local] - DIVERSITY_WEIGHT * clip_penalty
+        # Style diversity penalty — fraction of recent history sharing this candidate's
+        # style. Complements the CLIP penalty above: CLIP only catches paintings that
+        # *look* alike, so a different-looking painting from the same recently-dominant
+        # movement would otherwise sail through unpenalised.
+        if self.history:
+            recent_styles = [
+                self.paintings[hid]["style"]
+                for hid in self.history[-HISTORY_SIZE:]
+                if hid in self.paintings
+            ]
+            top_styles    = [self.paintings[self.ids[i]]["style"] for i in top_idx]
+            style_penalty = np.array([
+                recent_styles.count(s) / len(recent_styles) if recent_styles else 0.0
+                for s in top_styles
+            ])
+        else:
+            style_penalty = np.zeros(k)
+
+        final_scores = (
+            candidate_scores[top_local]
+            - DIVERSITY_WEIGHT * clip_penalty
+            - STYLE_DIVERSITY_WEIGHT * style_penalty
+        )
         # Weighted random sampling so lower-ranked paintings still get shown
         shifted = final_scores - final_scores.max()
         weights = np.exp(shifted / TEMPERATURE)

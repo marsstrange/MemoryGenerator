@@ -217,10 +217,11 @@ def launch_supercollider():
 
 
 def launch_processing():
-    """Auto-opens painting_visualizer.pde in whatever app the OS associates with .pde
-    files (the Processing IDE, if installed) for the current OS -- same as
-    double-clicking the file. Does NOT auto-run it: press Run inside Processing
-    yourself once it opens. Fire-and-forget, same as launch_supercollider()."""
+    """Auto-opens painting_visualizer.pde in the Processing IDE for the current OS,
+    passing the file directly as an argument (doesn't rely on a .pde file-type
+    association, which a portable Processing install often lacks). Does NOT auto-run
+    it: press Run inside Processing yourself once it opens. Fire-and-forget, same as
+    launch_supercollider()."""
     system = platform.system()
 
     try:
