@@ -397,16 +397,12 @@ def main():
             probs_buffer     = []
             last_select_time = now
 
-            # Show painting in separate window
-            # -- disabled: painting_visualizer.pde now draws the painting itself as the
-            # -- particle backdrop, so this separate Python window is redundant (one less
-            # -- window on screen). Kept here in case Processing isn't running.
-            # img = cv2.imread(current_painting["path"])
-            # if img is not None:
-            #     h, w = img.shape[:2]
-            #     scale = 600 / max(h, w)
-            #     img = cv2.resize(img, (int(w * scale), int(h * scale)))
-            #     cv2.imshow("Painting", img)
+            img = cv2.imread(current_painting["path"])
+            if img is not None:
+                h, w = img.shape[:2]
+                scale = 600 / max(h, w)
+                img = cv2.resize(img, (int(w * scale), int(h * scale)))
+                cv2.imshow("Painting", img)
 
         # ── painting info overlay ─────────────────────────────────────────────
         if selector:

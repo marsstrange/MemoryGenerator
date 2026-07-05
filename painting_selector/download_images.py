@@ -10,8 +10,9 @@ import requests
 import pandas as pd
 from tqdm import tqdm
 
-INFO_FILE = "./data/WikiArt-Emotions/WikiArt-info.tsv"
-OUT_DIR   = "./data/images"
+_HERE     = os.path.dirname(os.path.abspath(__file__))
+INFO_FILE = os.path.join(_HERE, "data", "WikiArt-Emotions", "WikiArt-info.tsv")
+OUT_DIR   = os.path.join(_HERE, "data", "images")
 
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)

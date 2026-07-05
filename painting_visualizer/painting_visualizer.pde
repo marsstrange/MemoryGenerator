@@ -31,6 +31,8 @@ final float SCATTER_DELTA_THRESHOLD = 0.03; // per-message hand_size jump counte
 final float SCATTER_STRENGTH        = 6.0;  // outward push at full scatterEnergy
 final float SCATTER_DECAY           = 0.90; // per-frame decay of the burst
 
+boolean returning = false;  // fist gesture: pull particles back to origin
+
 float[] gradAngle;
 float[] gradMag;
 
@@ -172,6 +174,10 @@ void oscEvent(OscMessage msg) {
     palmY  = ny;
     lastHandMsgTime = millis();
   }
+  else if (addr.equals("/gesture")) {
+    String g = msg.get(0).stringValue();
+    returning = g.equals("fist");
+  }
   else if (addr.equals("/hand_size")) {
     float ns    = msg.get(0).floatValue();
     float delta = ns - handSize;             // growth rate = how fast the palm is approaching
@@ -210,6 +216,13 @@ class PixelParticle {
   // palmForceX/Y: unit-ish vector of the palm's current movement direction,
   // magnitude ~0 when the palm is still or off-screen (see draw())
   void update(float palmForceX, float palmForceY) {
+    if (returning) {
+      vx = vx * 0.85 + (ox - x) * 0.03;
+      vy = vy * 0.85 + (oy - y) * 0.03;
+      x += vx; y += vy;
+      return;
+    }
+
     int sx  = constrain((int)(x / width  * (painting.width  - 1)), 0, painting.width  - 1);
     int sy  = constrain((int)(y / height * (painting.height - 1)), 0, painting.height - 1);
     int idx = sy * painting.width + sx;

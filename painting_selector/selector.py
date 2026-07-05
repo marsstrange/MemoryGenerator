@@ -5,6 +5,7 @@ import numpy as np
 
 _HERE          = os.path.dirname(os.path.abspath(__file__))
 PAINTINGS_FILE = os.path.join(_HERE, "data", "paintings.pkl")
+IMG_DIR        = os.path.join(_HERE, "data", "images")
 SCORES_FILE    = os.path.join(_HERE, "data", "personal_scores.json")
 
 FACE_EMOTIONS = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
@@ -174,7 +175,7 @@ class PaintingSelector:
         p = self.paintings[best_id]
         return {
             "id":     best_id,
-            "path":   p["path"],
+            "path":   os.path.join(IMG_DIR, best_id + ".jpg"),
             "style":  p["style"],
             "artist": p["artist"],
             "title":  p["title"],
