@@ -42,7 +42,6 @@ VA_COORDS = {
     "surprise": ( 0.1,  0.9),
 }
 
-PAINTING_INTERVAL = 20.0  # seconds between painting switches
 DEBUG_WINDOW = "Emotion Recognizer  |  Q to quit, D to toggle this window"
 
 if torch.backends.mps.is_available():
@@ -146,17 +145,19 @@ def draw_va_plot(frame, valence, arousal, size=220, margin=12):
                 (x0, y1 + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
 
 
-def draw_painting_info(frame, painting, style, time_left, score=0.0):
-    """Bottom-left overlay: current painting info + style + score + countdown."""
+def draw_painting_info(frame, painting, score=0.0):
+    """Bottom-left overlay: current painting info + style + score."""
     fh = frame.shape[0]
     overlay = frame.copy()
     cv2.rectangle(overlay, (0, fh - 88), (500, fh), (15, 15, 15), -1)
     cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
 
+    style = "-"
     if painting:
         artist = painting.get("artist", "")[:30]
         title  = painting.get("title",  "")[:35]
-        cv2.putText(frame, f"{artist} — {title}",
+        style  = painting.get("style", style)
+        cv2.putText(frame, f"{artist} - {title}",
                     (8, fh - 64), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
 
     score_color = (80, 220, 80) if score > 0 else (80, 80, 220) if score < 0 else (150, 150, 150)
@@ -164,8 +165,6 @@ def draw_painting_info(frame, painting, style, time_left, score=0.0):
                 (8, fh - 42), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 220, 255), 1)
     cv2.putText(frame, f"score: {score:+.1f}",
                 (8, fh - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, score_color, 1)
-    cv2.putText(frame, f"next in {int(time_left)}s",
-                (200, fh - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1)
 
 
 SCRIPTS_DIR = os.path.join(BASE_DIR, "..", "scripts")
@@ -286,14 +285,22 @@ def main():
     cv2.resizeWindow(DEBUG_WINDOW, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
 
     # State for painting selection
-    probs_buffer      = []        # accumulate face probs over 20s window
-    last_select_time  = time.time() - PAINTING_INTERVAL  # select immediately on first frame
+    probs_buffer      = []        # accumulate face probs since the last swipe-triggered selection
     current_painting  = None
     last_static        = None
     last_dynamic       = None
     last_feedback_time = {}  # gesture → timestamp, 5s cooldown per gesture type
     show_debug = True  # toggled with 'd' -- painting_visualizer.pde shows the audience-facing
                         # visuals now, so this debug window can be hidden during an actual showing
+
+    # "ok" toggles particle-follow mode in painting_visualizer.pde. Decided here (not in the
+    # Processing sketch) so it's a single source of truth shared with the swipe-nav gating below.
+    particles_active   = False
+    ok_streak           = 0
+    ok_consumed         = False
+    OK_STREAK_REQUIRED  = 4  # consecutive frames "ok" must hold before it counts as deliberate
+                             # (a single misclassified frame, e.g. motion blur during a fast
+                             # push, won't reach this and won't flip the toggle)
 
     painting_history = []  # every painting shown, in order, so swipes can browse back/forward
     painting_pos     = -1  # index into painting_history
@@ -313,7 +320,7 @@ def main():
 
     def select_new_painting():
         # Use averaged probs over the window, fallback to neutral
-        nonlocal current_painting, probs_buffer, last_select_time, painting_pos
+        nonlocal current_painting, probs_buffer, painting_pos
         if probs_buffer:
             avg_probs = np.mean(probs_buffer, axis=0)
         else:
@@ -327,8 +334,7 @@ def main():
             print(f"Select failed: {e}")
             painting = None
 
-        probs_buffer     = []
-        last_select_time = time.time()
+        probs_buffer = []
         if painting is None:
             current_painting = None
             return
@@ -338,6 +344,9 @@ def main():
         current_painting = painting
         display_painting(painting)
 
+    if selector:
+        select_new_painting()
+
     try:
       while True:
         ret, frame = cap.read()
@@ -345,9 +354,7 @@ def main():
             break
         frame = cv2.flip(frame, 1)   # mirror camera horizontally
 
-        now      = time.time()
-        elapsed  = now - last_select_time
-        time_left = max(0.0, PAINTING_INTERVAL - elapsed)
+        now = time.time()
 
         # ── face emotion ──────────────────────────────────────────────────────
         gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -392,6 +399,21 @@ def main():
             cv2.putText(frame, f"dynamic: {dynamic}", (10, 58),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
+            # "ok" held for a few net frames toggles particle-follow mode. Leaky counter
+            # (decays instead of hard-resetting) so a stray misclassified frame -- common
+            # right after fast hand motion, when landmark tracking gets jittery -- doesn't
+            # throw away an otherwise-genuine held "ok".
+            if static == "ok":
+                ok_streak = min(ok_streak + 1, OK_STREAK_REQUIRED)
+                if ok_streak >= OK_STREAK_REQUIRED and not ok_consumed:
+                    particles_active = not particles_active
+                    ok_consumed = True
+                    send_osc("/particles_active", 1 if particles_active else 0)
+            else:
+                ok_streak = max(ok_streak - 1, 0)
+                if ok_streak == 0:
+                    ok_consumed = False
+
             if selector and current_painting:
                 # Static gesture → feedback with 5s cooldown per gesture type
                 if static != last_static and static in ("thumbs_up", "thumbs_down", "ok"):
@@ -400,47 +422,47 @@ def main():
                         send_osc("/feedback", static)
                         last_feedback_time[static] = now
 
-                # Dynamic gesture → style navigation (once per gesture change)
-                # if dynamic != last_dynamic:
-                #     if dynamic == "swipe_up":
-                #         style = selector.next_style()
-                #         send_osc("/style", style)
-                #     elif dynamic == "swipe_down":
-                #         style = selector.prev_style()
-                #         send_osc("/style", style)
+                # Swipe navigation is only available while particle-follow mode is off,
+                # so the two don't fight over what a swipe means
+                if not particles_active:
+                    # Dynamic gesture → style navigation, forces an immediate new
+                    # painting pick so the style change is felt right away (once per gesture change)
+                    if dynamic != last_dynamic:
+                        if dynamic == "swipe_up":
+                            style = selector.next_style()
+                            send_osc("/style", style)
+                            select_new_painting()
+                        elif dynamic == "swipe_down":
+                            style = selector.prev_style()
+                            send_osc("/style", style)
+                            select_new_painting()
 
-                # Dynamic gesture → prev/next painting, bypassing the 20s wait
-                if dynamic != last_dynamic:
-                    if dynamic == "swipe_left" and painting_pos > 0:
-                        painting_pos     -= 1
-                        current_painting = painting_history[painting_pos]
-                        display_painting(current_painting)
-                        last_select_time = now
-                    elif dynamic == "swipe_right":
-                        if painting_pos < len(painting_history) - 1:
-                            painting_pos     += 1
+                    # Dynamic gesture → prev/next painting
+                    if dynamic != last_dynamic:
+                        if dynamic == "swipe_left" and painting_pos > 0:
+                            painting_pos     -= 1
                             current_painting = painting_history[painting_pos]
                             display_painting(current_painting)
-                            last_select_time = now
-                        else:
-                            select_new_painting()
+                        elif dynamic == "swipe_right":
+                            if painting_pos < len(painting_history) - 1:
+                                painting_pos     += 1
+                                current_painting = painting_history[painting_pos]
+                                display_painting(current_painting)
+                            else:
+                                select_new_painting()
 
             last_static  = static
             last_dynamic = dynamic
         else:
             last_static  = None
             last_dynamic = None
-
-        # ── painting selection every 20s ──────────────────────────────────────
-        if selector and elapsed >= PAINTING_INTERVAL:
-            select_new_painting()
-            if current_painting is None:
-                continue
+            ok_streak    = 0
+            ok_consumed  = False
 
         # ── painting info overlay ─────────────────────────────────────────────
         if selector:
             score = selector.personal_scores.get(current_painting["id"], 0.0) if current_painting else 0.0
-            draw_painting_info(frame, current_painting, selector.current_style, time_left, score)
+            draw_painting_info(frame, current_painting, score)
 
         # cv2.imshow("Emotion Recognizer  |  Q to quit", frame)
         # if cv2.waitKey(1) & 0xFF == ord("q"):
