@@ -149,7 +149,7 @@ class HandGestureDetector:
             return self._emit("wave")
 
         if abs(dx) > 0.18 and abs(dx) > abs(dy) * 1.8:
-            return self._emit("swipe_left" if dx > 0 else "swipe_right")
+            return self._emit("swipe_right" if dx > 0 else "swipe_left")
 
         if abs(dy) > 0.18 and abs(dy) > abs(dx) * 1.8:
             return self._emit("swipe_down" if dy > 0 else "swipe_up")

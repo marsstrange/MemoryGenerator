@@ -295,11 +295,55 @@ def main():
     show_debug = True  # toggled with 'd' -- painting_visualizer.pde shows the audience-facing
                         # visuals now, so this debug window can be hidden during an actual showing
 
+    painting_history = []  # every painting shown, in order, so swipes can browse back/forward
+    painting_pos     = -1  # index into painting_history
+
+    def display_painting(painting):
+        send_osc("/painting/path",   painting["path"])
+        send_osc("/painting/style",  painting["style"])
+        send_osc("/painting/artist", painting["artist"])
+        send_osc("/painting/title",  painting["title"])
+
+        img = cv2.imread(painting["path"])
+        if img is not None:
+            h, w = img.shape[:2]
+            scale = 600 / max(h, w)
+            img = cv2.resize(img, (int(w * scale), int(h * scale)))
+            cv2.imshow("Painting", img)
+
+    def select_new_painting():
+        # Use averaged probs over the window, fallback to neutral
+        nonlocal current_painting, probs_buffer, last_select_time, painting_pos
+        if probs_buffer:
+            avg_probs = np.mean(probs_buffer, axis=0)
+        else:
+            avg_probs = np.ones(7) / 7.0
+
+        try:
+            painting = selector.select(avg_probs)
+            print(f"Selected: {painting['artist']} — {painting['title']} "
+                  f"[{painting['style']}]")
+        except Exception as e:
+            print(f"Select failed: {e}")
+            painting = None
+
+        probs_buffer     = []
+        last_select_time = time.time()
+        if painting is None:
+            current_painting = None
+            return
+
+        painting_history.append(painting)
+        painting_pos     = len(painting_history) - 1
+        current_painting = painting
+        display_painting(painting)
+
     try:
       while True:
         ret, frame = cap.read()
         if not ret:
             break
+        frame = cv2.flip(frame, 1)   # mirror camera horizontally
 
         now      = time.time()
         elapsed  = now - last_select_time
@@ -357,13 +401,29 @@ def main():
                         last_feedback_time[static] = now
 
                 # Dynamic gesture → style navigation (once per gesture change)
+                # if dynamic != last_dynamic:
+                #     if dynamic == "swipe_up":
+                #         style = selector.next_style()
+                #         send_osc("/style", style)
+                #     elif dynamic == "swipe_down":
+                #         style = selector.prev_style()
+                #         send_osc("/style", style)
+
+                # Dynamic gesture → prev/next painting, bypassing the 20s wait
                 if dynamic != last_dynamic:
-                    if dynamic == "swipe_up":
-                        style = selector.next_style()
-                        send_osc("/style", style)
-                    elif dynamic == "swipe_down":
-                        style = selector.prev_style()
-                        send_osc("/style", style)
+                    if dynamic == "swipe_left" and painting_pos > 0:
+                        painting_pos     -= 1
+                        current_painting = painting_history[painting_pos]
+                        display_painting(current_painting)
+                        last_select_time = now
+                    elif dynamic == "swipe_right":
+                        if painting_pos < len(painting_history) - 1:
+                            painting_pos     += 1
+                            current_painting = painting_history[painting_pos]
+                            display_painting(current_painting)
+                            last_select_time = now
+                        else:
+                            select_new_painting()
 
             last_static  = static
             last_dynamic = dynamic
@@ -373,36 +433,9 @@ def main():
 
         # ── painting selection every 20s ──────────────────────────────────────
         if selector and elapsed >= PAINTING_INTERVAL:
-            # Use averaged probs over the window, fallback to neutral
-            if probs_buffer:
-                avg_probs = np.mean(probs_buffer, axis=0)
-            else:
-                avg_probs = np.ones(7) / 7.0
-
-            try:
-                current_painting = selector.select(avg_probs)
-                print(f"Selected: {current_painting['artist']} — {current_painting['title']} "
-                      f"[{current_painting['style']}]")
-            except Exception as e:
-                print(f"Select failed: {e}")
-                current_painting = None
+            select_new_painting()
             if current_painting is None:
-                last_select_time = now
                 continue
-            send_osc("/painting/path",   current_painting["path"])
-            send_osc("/painting/style",  current_painting["style"])
-            send_osc("/painting/artist", current_painting["artist"])
-            send_osc("/painting/title",  current_painting["title"])
-
-            probs_buffer     = []
-            last_select_time = now
-
-            img = cv2.imread(current_painting["path"])
-            if img is not None:
-                h, w = img.shape[:2]
-                scale = 600 / max(h, w)
-                img = cv2.resize(img, (int(w * scale), int(h * scale)))
-                cv2.imshow("Painting", img)
 
         # ── painting info overlay ─────────────────────────────────────────────
         if selector:
