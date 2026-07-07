@@ -81,34 +81,34 @@ SynthDef(\shimmerPad, { |out = 0, amp = 0.2, valence = 0, arousal = 0|
 
 // expressionist scape's pad — unstable FM plus bitcrushed noise bursts, as far from
 // shimmerPad's granular cloud as possible while staying synthesis-only (no samples).
-// Carrier/mod ratio jump around randomly (LFNoise0 = stepped, not smooth) for an
-// unpredictable, broken-electronics character instead of a floaty or tonal one.
+// Carrier/mod ratio drift slowly and smoothly (LFNoise1, not the stepped/jumpy LFNoise0
+// this used to use) for an unsettled-but-not-random character -- unstable without being chaotic.
 SynthDef(\glitchPad, { |out = 0, amp = 0.18, valence = 0, arousal = 0|
     var vLag, aLag, carrier, modFreq, modIndex, fm, burstTrig, noiseBurst, crushSteps, sig;
 
     vLag = Lag.kr(valence, 2);
     aLag = Lag.kr(arousal, 2);
 
-    carrier  = 55 + LFNoise0.kr(0.5).range(-8, 8);       // jumps around, never settles
-    modFreq  = carrier * LFNoise0.kr(0.7).range(1.5, 4.3); // inharmonic, randomly-stepped ratio
-    modIndex = 3 + (aLag.max(0) * 12);                     // harsher/more sidebands when aroused
+    carrier  = 55 + LFNoise1.kr(0.1).range(-8, 8);          // drifts smoothly, doesn't jump
+    modFreq  = carrier * LFNoise1.kr(0.15).range(1.5, 3.2); // slower, narrower inharmonic drift
+    modIndex = 2 + (aLag.max(0) * 6);                       // gentler sidebands even when aroused
 
     fm = SinOsc.ar(carrier + (SinOsc.ar(modFreq) * modFreq * modIndex)) * 0.5;
 
-    burstTrig  = Dust.kr(0.8 + (aLag.max(0) * 3));
+    burstTrig  = Dust.kr(0.4 + (aLag.max(0) * 1.5));        // sparser -> less repetitive
     // Latch = sample-and-hold at a low, arousal-dependent rate -> a lo-fi/decimated noise burst
     // (manual decimation with core UGens; Decimator itself needs the sc3-plugins extension)
-    noiseBurst = Latch.ar(WhiteNoise.ar(1), Impulse.ar(11025 - (aLag.max(0) * 10000)))
-                 * EnvGen.kr(Env.perc(0.001, 0.3), burstTrig) * 0.4;
+    noiseBurst = Latch.ar(WhiteNoise.ar(1), Impulse.ar(8000 - (aLag.max(0) * 6000)))
+                 * EnvGen.kr(Env.perc(0.001, 0.3), burstTrig) * 0.25;
 
     sig = fm + noiseBurst;
-    crushSteps = 2 ** LFNoise0.kr(0.3).range(3, 8).round(1);  // ~"3 to 8 bit" quantization steps
-    sig = (sig * crushSteps).round(1) / crushSteps;           // manual bitcrush (no plugin needed)
+    crushSteps = 2 ** LFNoise1.kr(0.2).range(5, 9).round(1);  // milder bitcrush -> less sharp
+    sig = (sig * crushSteps).round(1) / crushSteps;
     sig = sig * amp.lag(1.5);
     sig = HPF.ar(sig, 100);
-    sig = FreeVerb.ar(sig, mix: 0.15, room: 0.4, damp: 0.1);       // dry, close, unsettling
+    sig = FreeVerb.ar(sig, mix: 0.25, room: 0.5, damp: 0.15);  // a bit more space to smooth the edges
 
-    Out.ar(out, Pan2.ar(sig, LFNoise0.kr(1.5).range(-1, 1)));
+    Out.ar(out, Pan2.ar(sig, LFNoise1.kr(0.3).range(-1, 1)));  // slower pan drift
 }).add;
 
 // abstract scape's pad — additive drone: independent sine partials, each fading in/out on its
@@ -230,38 +230,40 @@ SynthDef(\calmNoise, { |out = 0, amp = 0.06|
     Out.ar(out, sig ! 2);
 }).add;
 
-// expressionist scape's one-shot voice — inharmonic, metallic noise-hits instead of a
-// tuned pluck/bell. freq sets the resonance center, not a note in a scale: each hit
-// gets its own random inharmonic ring and pan, so it never reads as "melody"
+// expressionist scape's one-shot voice — a tuned note (freq now comes from the octatonic
+// scale in ~scapeMap, not a random Hz value) with a touch of inharmonic ring and a brief
+// noisy attack transient for "unsettled" color, instead of the previous all-noise hit that
+// buried the pitch entirely and read as harsh, unpitched percussion
 SynthDef(\tenseHit, { |out = 0, freq = 200, amp = 0.15, rel = 0.6|
-    var env, sig;
+    var env, attackNoise, sig;
 
-    env = EnvGen.kr(Env.perc(0.001, rel, curve: -8), doneAction: 2);
+    env = EnvGen.kr(Env.perc(0.005, rel, curve: -4), doneAction: 2);
+    attackNoise = WhiteNoise.ar(0.15) * EnvGen.kr(Env.perc(0.001, 0.05));
 
-    sig = WhiteNoise.ar(0.6) + SinOsc.ar(freq);
-    sig = RLPF.ar(sig, freq * Rand(2.0, 6.0), 0.15);  // inharmonic metallic resonance, unique per hit
-    sig = HPF.ar(sig, 150);
-    sig = (sig * 64).round(1) / 64;                   // manual bitcrush grit, matches glitchPad
+    sig = SinOsc.ar(freq) + attackNoise;
+    sig = RLPF.ar(sig, freq * Rand(1.2, 2.2), 0.25);  // mild inharmonic color, stays close to the fundamental
+    sig = HPF.ar(sig, 80);
     sig = sig * env * amp;
 
     Out.ar(out, Pan2.ar(sig, Rand(-1.0, 1.0)));
 }).add;
 
-// expressionist scape's texture bed — grittier and more unstable than calmNoise:
-// faster/jumpier filter motion and random amplitude bursts instead of a smooth sweep
+// expressionist scape's texture bed — grittier and more unstable than calmNoise, but with
+// smooth (LFNoise2/LFNoise1) rather than jumpy (LFNoise0) motion, so it reads as unsettled
+// rather than chaotic
 SynthDef(\tenseNoise, { |out = 0, amp = 0.07|
     var sig, filtFreq, burst;
 
     sig = WhiteNoise.ar(amp.lag(1.5));
 
-    filtFreq = LFNoise2.kr(0.6).range(400, 6000);
-    sig = BPF.ar(sig, filtFreq, 0.15);
+    filtFreq = LFNoise2.kr(0.25).range(400, 5000);
+    sig = BPF.ar(sig, filtFreq, 0.2);
 
-    burst = LFNoise0.kr(2).range(0.4, 1.0);  // random jumps in level -> nervous/unstable feel
+    burst = LFNoise1.kr(0.8).range(0.5, 1.0);  // smooth swell instead of jumpy level changes
     sig = sig * burst;
 
-    sig = (sig * 128).round(1) / 128;                        // manual bitcrush grit, matches glitchPad
-    sig = FreeVerb.ar(sig, mix: 0.2, room: 0.5, damp: 0.2);  // drier than calmNoise
+    sig = (sig * 256).round(1) / 256;                        // milder grit than before
+    sig = FreeVerb.ar(sig, mix: 0.3, room: 0.6, damp: 0.25);
 
     Out.ar(out, sig ! 2);
 }).add;
@@ -344,26 +346,74 @@ SynthDef(\popHat, { |out = 0, amp = 0.04|
     Out.ar(out, sig ! 2);
 }).add;
 
-// "push position" voice for particle-follow mode — granular playback of a glass-break
-// sample (buf, set by SC_mood_reactive.scd) instead of the sample-free synthesis used
-// everywhere else, since the brief wants an actual recorded glass-break texture. Gated by
-// gate rather than a fixed envelope: SC_mood_reactive.scd sets gate=0 the instant
-// /push_active reports the palm has left the push position, so the sustained portion's
-// length always matches however long the palm was held there, however long that turns out
-// to be — the attack/release are just short shaping around that variable-length hold.
-SynthDef(\glassBreakGrain, { |out = 0, buf = 0, amp = 0.3, gate = 1|
-    var env, trig, pos, dur, rate, pan, grain, sig;
+// particle-follow mode's "scatter" voice -- fires on a fast approach (palm toward camera).
+// Synthesis-only (no sample): a sharp initial crack (fast-decay high-passed noise) followed
+// by a cloud of short, randomly-pitched high sine "shard" grains whose trigger density
+// decays from dense to sparse, like shards flying outward then settling. One-shot, fixed
+// duration -- this is a discrete event tied to the motion, not a sustained/held sound.
+SynthDef(\glassBreak, { |out = 0, amp = 0.35, dur = 1.8, attackTime = 0.05,
+                         verbMix = 0.25, verbRoom = 0.6, verbDamp = 0.2|
+    var overallEnv, crack, shardDensity, shardTrig, shards, sig, coreDur;
 
-    env = EnvGen.kr(Env.asr(0.05, 1, 0.4), gate, doneAction: 2);
+    // the crash itself (crack + shard density decay) stays a fixed, punchy length regardless
+    // of dur -- dur beyond coreDur only extends a gentle envelope tail-out, giving a bigger
+    // room-size reverb space to ring out in rather than dragging the dry crackle on for seconds
+    coreDur = 1.5;
 
-    trig = Dust.kr(30);                      // grain density
-    pos  = TRand.kr(0, 1, trig);              // scrub position within the buffer, 0-1
-    dur  = TRand.kr(0.05, 0.15, trig);        // grain length
-    rate = TRand.kr(0.7, 1.4, trig);          // per-grain playback-rate jitter -> pitch variety
-    pan  = TRand.kr(-1, 1, trig);
+    // attackTime replaces what used to be a hard 0.001s instant jump to full level -- a short
+    // fade-in avoids a click on the overall envelope while still reading as a fast, punchy hit
+    overallEnv = EnvGen.kr(Env.linen(attackTime, coreDur - 0.2 - attackTime, (dur - coreDur + 0.2).max(0.2)), doneAction: 2);
 
-    grain = GrainBuf.ar(2, trig, dur, buf, rate, pos, 2, pan, -1);
-    sig   = grain * env * amp;
+    crack = HPF.ar(WhiteNoise.ar(1), 2000) * EnvGen.kr(Env.perc(0.001, 0.08, curve: -10));
+
+    shardDensity = EnvGen.kr(Env([35, 35, 0.5], [0.05, coreDur - 0.15], curve: -4));
+    shardTrig    = Dust.kr(shardDensity);
+
+    shards = Mix.fill(3, {
+        var freq = TExpRand.kr(1800, 7000, shardTrig);
+        var pan  = TRand.kr(-1.0, 1.0, shardTrig);
+        var env  = EnvGen.kr(Env.perc(0.001, TRand.kr(0.03, 0.15, shardTrig), curve: -8), shardTrig);
+        Pan2.ar(SinOsc.ar(freq) * env, pan) * 0.3;
+    });
+
+    sig = (crack ! 2 * 0.6) + shards;
+    sig = sig * amp * overallEnv;
+    sig = FreeVerb.ar(sig, mix: verbMix, room: verbRoom, damp: verbDamp);
+
+    Out.ar(out, sig);
+}).add;
+
+// particle-follow mode's "regroup" voice -- gated, not a fixed-duration one-shot: swells in
+// once (~0.6s), then holds at a settled rumble for exactly as long as gate=1 (i.e. for as
+// long as camera.py's /regrouping says the palm is still parked in the back position), and
+// fades out over releaseDur the instant gate drops (palm moved forward again or sideways).
+// A soft "settling click" marks that release moment instead of a scheduled impact, since
+// there's no longer a predetermined end time to schedule one against.
+SynthDef(\glassRegroup, { |out = 0, amp = 0.35, gate = 1, buildDur = 0.6, releaseDur = 0.8,
+                           verbMix = 0.25, verbRoom = 0.6, verbDamp = 0.2|
+    var env, releaseTrig, thud, shardDensity, shardTrig, shards, sig;
+
+    env = EnvGen.kr(Env.asr(buildDur, 1, releaseDur), gate, doneAction: 2);
+
+    // rises once over buildDur, then EnvGen just keeps outputting the final level indefinitely
+    // -- no gate-awareness needed here, the settled rate holds on its own until freed
+    shardDensity = EnvGen.kr(Env([0.5, 18], [buildDur], curve: 4));
+    shardTrig    = Dust.kr(shardDensity);
+
+    shards = Mix.fill(3, {
+        var freq = TExpRand.kr(1800, 7000, shardTrig);
+        var pan  = TRand.kr(-1.0, 1.0, shardTrig);
+        var shardEnv = EnvGen.kr(Env.perc(0.001, TRand.kr(0.03, 0.15, shardTrig), curve: -8), shardTrig);
+        Pan2.ar(SinOsc.ar(freq) * shardEnv, pan) * 0.3;
+    });
+
+    // fires exactly once, right when gate transitions from 1 to 0
+    releaseTrig = Trig.kr(1 - gate, 0.01);
+    thud = HPF.ar(WhiteNoise.ar(1), 1200) * EnvGen.kr(Env.perc(0.01, 0.15, curve: -6), releaseTrig);
+
+    sig = (thud ! 2 * 0.5) + shards;
+    sig = sig * amp * env;
+    sig = FreeVerb.ar(sig, mix: verbMix, room: verbRoom, damp: verbDamp);
 
     Out.ar(out, sig);
 }).add;

@@ -12,9 +12,6 @@ s.waitForBoot({
 
 "calm_synthdefs.scd".loadRelative;
 
-// sample for \glassBreakGrain's granular "push position" voice (see calm_synthdefs.scd)
-~glassBuf = Buffer.read(s, thisProcess.nowExecutingPath.dirname +/+ "samples/glass break normal.wav");
-
 thisProcess.openUDPPort(12001);
 
 ~clock = TempoClock.default;
@@ -59,22 +56,29 @@ thisProcess.openUDPPort(12001);
         var g = Group.tail(~padGroup);
         ~pad      = Synth(\glitchPad, [\amp, 0.18, \valence, ~mood.valence, \arousal, ~mood.arousal], g);
         ~noiseBed = Synth(\tenseNoise, [\amp, 0.07], g);
-        // inharmonic metallic hits, not tuned notes — no \scale/\degree, freq is
-        // just the resonance center (see \tenseHit), so this reads as noise-events
-        // rather than a melody, deliberately unlike classical's plucked/bell voice
+        // octatonic (half-whole) scale -- "wrong"-sounding but still musical harmony, unlike
+        // the previous random-Hz noise-hits that buried the pitch and felt chaotic/repetitive.
+        // Pxrand never immediately repeats a degree, and durations are slower/more varied than
+        // before so it doesn't feel as frantic or samey.
         ~plucks = Pbind(
             \instrument, \tenseHit,
-            \freq,    Pwhite(300, 1200, inf),
-            \dur,     Pwhite(0.15, 0.9, inf),        // fast, agitated
-            \rel,     Pwhite(0.2, 0.8, inf),
-            \amp,     Pwhite(0.08, 0.18, inf),
+            \scale,   Scale.new([0, 1, 3, 4, 6, 7, 9, 10], 12),
+            \root,    0,
+            \octave,  Pwrand([4, 5], [0.6, 0.4], inf),
+            \degree,  Pxrand((0..7), inf),
+            \dur,     Pwhite(0.7, 1.8, inf),
+            \rel,     Pwhite(0.6, 1.4, inf),
+            \amp,     Pwhite(0.05, 0.12, inf),
         ).play(~clock, target: g);
         ~bells = Pbind(
             \instrument, \tenseHit,
-            \freq,    Pwhite(60, 200, inf),          // low, ominous rumbles
-            \dur,     Pwhite(1.0, 3.5, inf),
-            \rel,     Pwhite(1.5, 4.0, inf),
-            \amp,     Pwhite(0.10, 0.20, inf),
+            \scale,   Scale.new([0, 1, 3, 4, 6, 7, 9, 10], 12),
+            \root,    -12,
+            \octave,  Pwrand([2, 3], [0.7, 0.3], inf),
+            \degree,  Pxrand((0..7), inf),
+            \dur,     Pwhite(3.0, 6.0, inf),
+            \rel,     Pwhite(2.5, 5.0, inf),
+            \amp,     Pwhite(0.07, 0.14, inf),
         ).play(~clock, target: g);
         g;
     },
@@ -225,14 +229,18 @@ SynthDef(\palmVoice, { |out = 0, pan = 0, cutoff = 1200, amp = 0, room = 0.6|
 // actually confirmed it finished compiling, causing "SynthDef not found" errors
 s.sync;
 
-// numFrames == 0 (or a giant/bogus number) means the path didn't resolve to a real file --
-// this only prints something meaningful because it runs after s.sync, once the async
-// Buffer.read has actually completed
-("glass sample loaded: " ++ ~glassBuf.numFrames ++ " frames, "
-    ++ ~glassBuf.numChannels ++ " channel(s), path=" ++ ~glassBuf.path).postln;
-
 ~handTimeout      = 0.3;
-~scatterThreshold = 0.05;  // hand_size jump per message counted as "fast approach"
+~scatterThreshold = 0.05;  // /hand_size_delta (windowed, ~8 frames) counted as "fast approach/retreat"
+~glassVerbMix     = 0.75;    // dry/wet ratio for \glassBreak / \glassRegroup's reverb (0=dry, 1=wet)
+~glassVerbRoom    = 0.95; // reverb room size, close to 1 = big hall (longer decay tail)
+~glassDur         = 3.5;  // total synth lifetime -- needs to be long enough that a big-hall
+                          // reverb tail isn't abruptly cut off when the synth frees itself
+
+// \glassRegroup is gated (see /regrouping below), not duration-based -- it holds for exactly
+// as long as camera.py says the palm is parked in the back position, so only the swell-in and
+// fade-out shaping need configuring here, not an overall length.
+~glassRegroupBuild   = 0.6;
+~glassRegroupRelease = 0.8;
 
 ~feedbackFreqs = Dictionary.newFrom([
     \thumbs_up,   660,
@@ -256,10 +264,9 @@ s.sync;
     ~scapeGroup       = nil;
     ~currentScapeName = nil;
     ~mood             = (valence: 0.0, arousal: 0.0, emotion: \neutral);
-    ~lastHandSize     = 0;
     ~particlesActive  = false;  // mirrors camera.py's /particles_active toggle
-    ~glassSynth       = nil;    // currently-playing \glassBreakGrain, if any (see /push_active)
-    ~glassPlaying     = false;
+    ~regroupSynth     = nil;    // currently-held \glassRegroup, if any (see /regrouping)
+    ~regrouping       = false;
 
     ~palm = Synth(\palmVoice, [\amp, 0], ~padGroup);
 
@@ -322,18 +329,47 @@ OSCdef(\palmYRx, { |msg|
 }, '/palm_y');
 
 OSCdef(\handSizeRx, { |msg|
-    var size  = msg[1];
-    var delta = size - ~lastHandSize;
+    var size = msg[1];
     ~palm.set(\room, size.linlin(0.1, 0.4, 0.8, 0.2));   // closer -> drier/closer-sounding
-    // fast approach -> impact accent, mirrors the visual particle scatter burst. Only outside
-    // particle-follow mode -- in that mode /push_active drives the glass-break voice instead,
-    // and this independent trigger would otherwise still fire the bell alongside/over it
-    if (delta > ~scatterThreshold and: { ~particlesActive.not }) {
-        Synth.tail(~padGroup, \calmBell, [\freq, 300, \amp, 0.15, \rel, 3]);
-    };
-    ~lastHandSize = size;
     ~lastHandTime = Main.elapsedTime;
 }, '/hand_size');
+
+// Windowed (not frame-to-frame) delta computed once in camera.py -- a single-message delta
+// missed slower-but-still-deliberate pushes/retreats that spread their motion across several
+// frames instead of spiking in just one. Matches what painting_visualizer.pde now uses too.
+OSCdef(\handSizeDeltaRx, { |msg|
+    var delta = msg[1];
+    if (~particlesActive) {
+        // particle-follow mode: fast approach -> scatter voice (one-shot). Regroup is no
+        // longer triggered from here -- it's a sustained state, see /regrouping below.
+        if (delta > ~scatterThreshold) {
+            Synth.tail(~padGroup, \glassBreak,
+                [\amp, 0.08, \dur, ~glassDur, \verbMix, ~glassVerbMix, \verbRoom, ~glassVerbRoom]);
+        };
+    } {
+        // outside particle-follow mode: the original generic fast-approach accent
+        if (delta > ~scatterThreshold) {
+            Synth.tail(~padGroup, \calmBell, [\freq, 300, \amp, 0.15, \rel, 3]);
+        };
+    };
+}, '/hand_size_delta');
+
+// Sustained on/off from camera.py (not a one-shot event) -- \glassRegroup plays for exactly
+// as long as /regrouping stays 1 (i.e. the palm stays parked in the back position), by
+// releasing its gate the instant camera.py reports the palm moved on to something else.
+OSCdef(\regroupingRx, { |msg|
+    var active = msg[1] > 0;
+    if (active and: { ~regrouping.not }) {
+        ~regroupSynth = Synth.tail(~padGroup, \glassRegroup,
+            [\amp, 0.1, \gate, 1, \buildDur, ~glassRegroupBuild, \releaseDur, ~glassRegroupRelease,
+             \verbMix, ~glassVerbMix, \verbRoom, ~glassVerbRoom]);
+        ~regrouping = true;
+    };
+    if (active.not and: { ~regrouping }) {
+        ~regroupSynth.set(\gate, 0);
+        ~regrouping = false;
+    };
+}, '/regrouping');
 
 OSCdef(\feedbackRx, { |msg|
     var gesture = msg[1].asSymbol;
@@ -346,31 +382,13 @@ OSCdef(\particlesActiveRx, { |msg|
     ("particles_active -> " ++ ~particlesActive).postln;
 }, '/particles_active');
 
-// Sustained on/off from camera.py's hand_size hysteresis (not a one-shot event) -- the
-// granular glass-break voice plays for exactly as long as /push_active stays 1, regardless
-// of how long that turns out to be, by releasing its gate the instant it goes back to 0.
-OSCdef(\pushActiveRx, { |msg|
-    var active = msg[1] > 0;
-    ("push_active -> " ++ active ++ " (glassPlaying was " ++ ~glassPlaying ++ ")").postln;
-    if (active and: { ~glassPlaying.not }) {
-        ~glassSynth = Synth.tail(~padGroup, \glassBreakGrain, [\buf, ~glassBuf, \amp, 0.3, \gate, 1]);
-        ~glassPlaying = true;
-        "-> started glassBreakGrain".postln;
-    };
-    if (active.not and: { ~glassPlaying }) {
-        ~glassSynth.set(\gate, 0);
-        ~glassPlaying = false;
-        "-> released glassBreakGrain".postln;
-    };
-}, '/push_active');
-
 OSCdef(\dynamicRx, { |msg|
     var gesture = msg[1].asSymbol;
     case
     { gesture == \swipe_left  } { Synth.tail(~padGroup, \calmPluck, [\freq, 500, \amp, 0.1,  \rel, 2]) }
     { gesture == \swipe_right } { Synth.tail(~padGroup, \calmPluck, [\freq, 700, \amp, 0.1,  \rel, 2]) }
     { gesture == \push        } {
-        // in particle-follow mode, /push_active above drives the glass-break voice instead
+        // in particle-follow mode, handSizeRx above drives the scatter/regroup voices instead
         if (~particlesActive.not) {
             Synth.tail(~padGroup, \calmBell, [\freq, 200, \amp, 0.18, \rel, 4]);
         };

@@ -25,11 +25,27 @@ final int   PALM_TIMEOUT = 200;        // ms of silence => treat hand as gone, p
 float   handSize = 0.0;                // raw /hand_size (~0.1 far - 0.4 close, 0 = no hand)
 float   sZoom = 1.0;                   // smoothed zoom actually applied around canvas centre
 
-// ── fast-approach scatter ───────────────────────────────────────────────────
+// ── fast-approach scatter (one-shot burst) ───────────────────────────────────
 float   scatterEnergy = 0;             // 0-1, spikes on a fast approach then decays
-final float SCATTER_DELTA_THRESHOLD = 0.03; // per-message hand_size jump counted as "fast"
+final float SCATTER_DELTA_THRESHOLD = 0.05; // /hand_size_delta (windowed, ~8 frames) counted as "fast"
 final float SCATTER_STRENGTH        = 6.0;  // outward push at full scatterEnergy
 final float SCATTER_DECAY           = 0.90; // per-frame decay of the burst
+
+// ── fast-retreat magnetize-back (sustained, not a one-shot) ──────────────────
+// regroupEnergy stays pinned at 1.0 for as long as camera.py's /regrouping says the palm is
+// still parked in the back position -- it only starts decaying once told to stop (palm moved
+// forward again or sideways), instead of fading out on its own fixed timeline regardless
+boolean regroupingActive = false;
+float   regroupEnergy    = 0;          // 0-1, held at 1 while regroupingActive, else decays
+final float REGROUP_STRENGTH = 0.12;   // inward pull at full regroupEnergy (not a unit vector
+                                        // like scatter -- scaled directly by distance-from-origin)
+
+// ── idle Brownian jitter, always on in both modes ────────────────────────────
+// a small random-walk wiggle so particles never look perfectly frozen/static, even with no
+// hand present -- deliberately subtle, and reined in by BROWNIAN_SPRING so it wanders around
+// its origin rather than drifting away unboundedly like a true unconstrained random walk
+final float BROWNIAN_STRENGTH = 0.45;
+final float BROWNIAN_SPRING   = 0.02;
 
 boolean returning = false;  // fist gesture: pull particles back to origin
 
@@ -76,6 +92,7 @@ void draw() {
   sZoom = lerp(sZoom, constrain(targetZoom, 0.5, 2.0), 0.05);
 
   scatterEnergy *= SCATTER_DECAY;   // burst fades on its own; oscEvent re-tops it up while approach stays fast
+  if (regroupingActive) { regroupEnergy = 1.0; } else { regroupEnergy *= SCATTER_DECAY; }
 
   if (needsRespawn && painting != null) {
     spawnFromBox();
@@ -190,11 +207,21 @@ void oscEvent(OscMessage msg) {
     particlesEnabled = msg.get(0).intValue() != 0;
   }
   else if (addr.equals("/hand_size")) {
-    float ns    = msg.get(0).floatValue();
-    float delta = ns - handSize;             // growth rate = how fast the palm is approaching
-    handSize = ns;
+    handSize = msg.get(0).floatValue();
     lastHandMsgTime = millis();
+  }
+  else if (addr.equals("/hand_size_delta")) {
+    // windowed (not frame-to-frame) delta computed once in camera.py, and the exact same
+    // signal SC_mood_reactive.scd triggers \glassBreak from -- using this instead of a
+    // separately-computed single-frame delta here is what keeps the particle scatter burst
+    // and its matching sound firing at the same instant
+    float delta = msg.get(0).floatValue();
     if (particlesEnabled && delta > SCATTER_DELTA_THRESHOLD) scatterEnergy = 1.0;
+  }
+  else if (addr.equals("/regrouping")) {
+    // sustained state from camera.py (not a one-shot event): stays 1 for as long as the palm
+    // is parked in the back position, 0 once it moves forward again or drifts sideways
+    regroupingActive = msg.get(0).intValue() != 0;
   }
 }
 
@@ -234,6 +261,15 @@ class PixelParticle {
       return;
     }
 
+    if (!particlesEnabled) {
+      // swipe mode: no ambient flow/noise/spring drift, only a subtle idle Brownian wiggle
+      // (bounded by BROWNIAN_SPRING so it wanders near its origin rather than drifting away)
+      vx = vx * 0.9 + randomGaussian() * BROWNIAN_STRENGTH + (ox - x) * BROWNIAN_SPRING;
+      vy = vy * 0.9 + randomGaussian() * BROWNIAN_STRENGTH + (oy - y) * BROWNIAN_SPRING;
+      x += vx; y += vy;
+      return;
+    }
+
     int sx  = constrain((int)(x / width  * (painting.width  - 1)), 0, painting.width  - 1);
     int sy  = constrain((int)(y / height * (painting.height - 1)), 0, painting.height - 1);
     int idx = sy * painting.width + sx;
@@ -261,10 +297,21 @@ class PixelParticle {
     float scatterX = cd > 1 ? (cx / cd) * scatterEnergy * SCATTER_STRENGTH : 0;
     float scatterY = cd > 1 ? (cy / cd) * scatterEnergy * SCATTER_STRENGTH : 0;
 
+    // magnetize back toward original position, ~0 unless a fast retreat just fired
+    // regroupEnergy -- the mirror of scatterX/Y above (pulls toward origin instead of
+    // pushing from screen centre)
+    float regroupX = (ox - x) * regroupEnergy * REGROUP_STRENGTH;
+    float regroupY = (oy - y) * regroupEnergy * REGROUP_STRENGTH;
+
+    // idle Brownian wiggle, same as swipe mode's -- kept subtle and unscaled so it's felt
+    // equally everywhere, same as the scatter/regroup terms below
+    float brownX = randomGaussian() * BROWNIAN_STRENGTH;
+    float brownY = randomGaussian() * BROWNIAN_STRENGTH;
+
     // palm term is kept out of the "* speed * 0.1" scaling (which shrinks near high-gradient
     // painting areas) so a swipe always gives the same strong, obvious push, ~0 when palm is still
-    vx = vx * 0.9 + (edgeX + noiseX + springX) * speed * 0.1 + palmForceX * PALM_PUSH + scatterX;
-    vy = vy * 0.9 + (edgeY + noiseY + springY) * speed * 0.1 + palmForceY * PALM_PUSH + scatterY;
+    vx = vx * 0.9 + (edgeX + noiseX + springX) * speed * 0.1 + palmForceX * PALM_PUSH + scatterX + regroupX + brownX;
+    vy = vy * 0.9 + (edgeY + noiseY + springY) * speed * 0.1 + palmForceY * PALM_PUSH + scatterY + regroupY + brownY;
 
     x += vx; y += vy;
     life--;

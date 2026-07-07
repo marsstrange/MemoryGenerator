@@ -4,6 +4,8 @@ import time
 import platform
 import subprocess
 import unicodedata
+import math
+from collections import deque
 import cv2
 import torch
 import torch.nn as nn
@@ -298,6 +300,28 @@ def main():
     last_static        = None
     last_dynamic       = None
     last_feedback_time = {}  # gesture → timestamp, 5s cooldown per gesture type
+
+    # Windowed (not frame-to-frame) hand_size delta -- a single-message delta is fragile
+    # against push speed: a fast jerky push reliably crosses a per-frame threshold, but a
+    # slower deliberate push can spread the same total motion across several frames, none
+    # of which individually cross it. Comparing across a short window instead (same idea
+    # hand_gesture.py already uses for its own ballistic "push" classifier) fixes that, and
+    # centralizing it here means /painting_visualizer.pde and SC both react to the same
+    # derived signal instead of independently recomputing their own single-frame version.
+    HAND_SIZE_WINDOW = 8
+    hand_size_hist = deque(maxlen=HAND_SIZE_WINDOW)
+
+    # "regrouping" is a sustained state (not a one-shot burst): starts on a fast retreat, and
+    # keeps going -- however long that turns out to be -- while the palm just sits parked in
+    # that back position. It only ends when the palm does something else: comes back toward
+    # the camera (approach), or drifts sideways. Mirrors hand_size_hist's windowed-delta trick
+    # for the same noise-robustness reason.
+    regrouping_active = False
+    palm_x_hist = deque(maxlen=HAND_SIZE_WINDOW)
+    palm_y_hist = deque(maxlen=HAND_SIZE_WINDOW)
+    REGROUP_DELTA_THRESHOLD  = 0.05  # matches painting_visualizer.pde's/SC's ~scatterThreshold
+    LATERAL_CANCEL_THRESHOLD = 0.12  # windowed palm_x/y movement counted as "moved to the side"
+
     show_debug = True  # toggled with 'd' -- painting_visualizer.pde shows the audience-facing
                         # visuals now, so this debug window can be hidden during an actual showing
 
@@ -309,14 +333,6 @@ def main():
     OK_STREAK_REQUIRED  = 4  # consecutive frames "ok" must hold before it counts as deliberate
                              # (a single misclassified frame, e.g. motion blur during a fast
                              # push, won't reach this and won't flip the toggle)
-
-    # "push position" -- hand held close to the camera, particle-follow mode only. Sent as a
-    # sustained on/off signal (not a one-shot event) so the granular glass-break sound in SC
-    # can play for exactly as long as the palm stays in this position. Hysteresis (enter/exit
-    # thresholds differ) avoids flicker right at the boundary.
-    push_active      = False
-    PUSH_SIZE_ENTER  = 0.30
-    PUSH_SIZE_EXIT   = 0.26
 
     painting_history = []  # every painting shown, in order, so swipes can browse back/forward
     painting_pos     = -1  # index into painting_history
@@ -424,22 +440,33 @@ def main():
             static  = hand["static"]  or ""
             dynamic = hand["dynamic"] or ""
 
-            send_osc("/gesture",     static  or "none")
-            send_osc("/dynamic",     dynamic or "none")
-            send_osc("/palm_x",      float(hand["palm_x"]))
-            send_osc("/palm_y",      float(hand["palm_y"]))
-            send_osc("/hand_size",   float(hand["hand_size"]))
-            send_osc("/pinch",       float(hand["pinch"]))
-            send_osc("/spread",      float(hand["spread"]))
-            send_osc("/wrist_angle", float(hand["wrist_angle"]))
+            hand_size_hist.append(hand["hand_size"])
+            hand_size_delta = (
+                hand_size_hist[-1] - hand_size_hist[0]
+                if len(hand_size_hist) == HAND_SIZE_WINDOW else 0.0
+            )
+
+            palm_x_hist.append(hand["palm_x"])
+            palm_y_hist.append(hand["palm_y"])
+            lateral_delta = (
+                math.hypot(palm_x_hist[-1] - palm_x_hist[0], palm_y_hist[-1] - palm_y_hist[0])
+                if len(palm_x_hist) == HAND_SIZE_WINDOW else 0.0
+            )
+
+            send_osc("/gesture",       static  or "none")
+            send_osc("/dynamic",       dynamic or "none")
+            send_osc("/palm_x",        float(hand["palm_x"]))
+            send_osc("/palm_y",        float(hand["palm_y"]))
+            send_osc("/hand_size",     float(hand["hand_size"]))
+            send_osc("/hand_size_delta", float(hand_size_delta))
+            send_osc("/pinch",         float(hand["pinch"]))
+            send_osc("/spread",        float(hand["spread"]))
+            send_osc("/wrist_angle",   float(hand["wrist_angle"]))
 
             cv2.putText(frame, f"gesture: {static}",  (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.putText(frame, f"dynamic: {dynamic}", (10, 58),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            # temporary readout for calibrating PUSH_SIZE_ENTER/EXIT against this camera's framing
-            cv2.putText(frame, f"hand_size: {hand['hand_size']:.3f}  (push>{PUSH_SIZE_ENTER})",
-                        (10, 114), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 100), 2)
 
             # "ok" held for a few net frames toggles particle-follow mode. Leaky counter
             # (decays instead of hard-resetting) so a stray misclassified frame -- common
@@ -456,18 +483,23 @@ def main():
                 if ok_streak == 0:
                     ok_consumed = False
 
-            # Sustained "push position" signal, particle-follow mode only -- drives the
-            # granular glass-break sound in SC for exactly as long as the palm stays close
+            # "regrouping" sustains for as long as the palm stays parked in the back
+            # position it just retreated to -- only ends when the palm does something else:
+            # comes forward again, or drifts sideways. REGROUP_DELTA_THRESHOLD matches
+            # painting_visualizer.pde's/SC's ~scatterThreshold so all three agree on "fast".
             if particles_active:
-                if not push_active and hand["hand_size"] > PUSH_SIZE_ENTER:
-                    push_active = True
-                    send_osc("/push_active", 1)
-                elif push_active and hand["hand_size"] < PUSH_SIZE_EXIT:
-                    push_active = False
-                    send_osc("/push_active", 0)
-            elif push_active:
-                push_active = False
-                send_osc("/push_active", 0)
+                if not regrouping_active and hand_size_delta < -REGROUP_DELTA_THRESHOLD:
+                    regrouping_active = True
+                    send_osc("/regrouping", 1)
+                elif regrouping_active and (
+                    hand_size_delta > REGROUP_DELTA_THRESHOLD
+                    or lateral_delta > LATERAL_CANCEL_THRESHOLD
+                ):
+                    regrouping_active = False
+                    send_osc("/regrouping", 0)
+            elif regrouping_active:
+                regrouping_active = False
+                send_osc("/regrouping", 0)
 
             if selector and current_painting:
                 # Static gesture → feedback with 5s cooldown per gesture type
@@ -513,9 +545,12 @@ def main():
             last_dynamic = None
             ok_streak    = 0
             ok_consumed  = False
-            if push_active:
-                push_active = False
-                send_osc("/push_active", 0)
+            hand_size_hist.clear()
+            palm_x_hist.clear()
+            palm_y_hist.clear()
+            if regrouping_active:
+                regrouping_active = False
+                send_osc("/regrouping", 0)
 
         # ── mode indicator ──────────────────────────────────────────────────────
         mode_text  = "PARTICLES (swipes disabled)" if particles_active else "SWIPE"

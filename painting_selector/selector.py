@@ -34,6 +34,46 @@ HISTORY_SIZE     = 20    # how many recent paintings to exclude
 TOP_K            = 50    # candidates from emotion matching before diversity re-rank
 TEMPERATURE      = 0.3   # sampling temperature: lower = closer to argmax, higher = more random
 
+# Mirrors SC_mood_reactive.scd's ~styleToScape -- kept in sync manually, since Python has no
+# visibility into the SuperCollider side. Used so swiping to the next/previous style always
+# lands on a different audio "scape" instead of e.g. cycling from Realism to Baroque, which
+# sound identical since both resolve to \classical.
+STYLE_TO_SCAPE = {
+    "Realism":             "classical",
+    "Northern Renaissance": "classical",
+    "Early Renaissance":    "classical",
+    "High Renaissance":     "classical",
+    "Baroque":              "classical",
+    "Rococo":               "classical",
+    "Romanticism":          "classical",
+    "Neoclassicism":        "classical",
+
+    "Expressionism":        "expressionist",
+    "Neo-Expressionism":    "expressionist",
+    "Cubism":               "expressionist",
+    "Surrealism":           "expressionist",
+
+    "Abstract Art":           "abstract",
+    "Abstract Expressionism": "abstract",
+    "Minimalism":             "abstract",
+    "Color Field Painting":   "abstract",
+    "Lyrical Abstraction":    "abstract",
+    "Art Informel":           "abstract",
+
+    "Impressionism":      "impressionist",
+    "Post-Impressionism": "impressionist",
+    "Magic Realism":      "impressionist",
+
+    "Pop Art": "pop",
+}
+
+# Per-style multiplier on candidate_scores before ranking/sampling -- only matters when
+# multiple styles are competing (i.e. the "All" style filter); has no effect when the
+# style filter is narrowed to one specific style, since every candidate gets the same factor
+STYLE_BOOST = {
+    "Pop Art": 3.0,
+}
+
 
 class PaintingSelector:
 
@@ -68,12 +108,26 @@ class PaintingSelector:
     def current_style(self):
         return self.styles[self.style_idx]
 
+    def _scape_of(self, style):
+        if style == "All":
+            return None  # unconstrained -- always counts as "different" from any real scape
+        first = style.split(",")[0]
+        return STYLE_TO_SCAPE.get(first, "classical")
+
     def next_style(self):
-        self.style_idx = (self.style_idx + 1) % len(self.styles)
+        start_scape = self._scape_of(self.current_style)
+        for _ in range(len(self.styles) - 1):  # bounded: at most one full pass over the others
+            self.style_idx = (self.style_idx + 1) % len(self.styles)
+            if self._scape_of(self.current_style) != start_scape:
+                break
         return self.current_style
 
     def prev_style(self):
-        self.style_idx = (self.style_idx - 1) % len(self.styles)
+        start_scape = self._scape_of(self.current_style)
+        for _ in range(len(self.styles) - 1):
+            self.style_idx = (self.style_idx - 1) % len(self.styles)
+            if self._scape_of(self.current_style) != start_scape:
+                break
         return self.current_style
 
     # ── face probs → 20-dim emotion vector ───────────────────────────────────
@@ -158,8 +212,20 @@ class PaintingSelector:
         else:
             style_penalty = np.zeros(k)
 
+        # Style boost applied only within the already-qualified top-K pool -- a re-ranking
+        # nudge, not a pre-filter, so it can't squeeze every other style out of contention.
+        # Skipped when there's no history yet (i.e. the very first pick of a session): that
+        # draw has no diversity penalty to balance against, so the boost would otherwise
+        # dominate it almost outright instead of just nudging the odds.
+        if self.history:
+            style_boost = np.array([
+                STYLE_BOOST.get(self.paintings[self.ids[i]]["style"], 1.0) for i in top_idx
+            ])
+        else:
+            style_boost = np.ones(k)
+
         final_scores = (
-            candidate_scores[top_local]
+            candidate_scores[top_local] * style_boost
             - DIVERSITY_WEIGHT * clip_penalty
             - STYLE_DIVERSITY_WEIGHT * style_penalty
         )
