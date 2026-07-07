@@ -53,12 +53,14 @@ class PaintingSelector:
         self.styles    = ["All"] + sorted(set(p["style"] for p in self.paintings.values() if p["style"]))
         self.style_idx = 0
 
-        self.personal_scores = {}
+        self.personal_scores = self._load_scores()
 
         self.history          = []   # recently shown painting IDs
         self.current_painting = None
 
         print(f"Loaded {len(self.ids)} paintings, {len(self.styles)-1} styles")
+        if self.personal_scores:
+            print(f"Restored {len(self.personal_scores)} personal scores")
 
     # ── style navigation ──────────────────────────────────────────────────────
 
@@ -203,8 +205,31 @@ class PaintingSelector:
             score += 0.2
         self.personal_scores[painting_id] = max(-3.0, min(3.0, score))
 
+    def _load_scores(self):
+        """Restore the taste profile learned in previous sessions. A missing file
+        (first run) or a corrupt one just falls back to an empty profile rather
+        than crashing startup."""
+        if not os.path.exists(SCORES_FILE):
+            return {}
+        try:
+            with open(SCORES_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+
     def save_scores(self):
         os.makedirs(os.path.dirname(SCORES_FILE), exist_ok=True)
         with open(SCORES_FILE, "w") as f:
             json.dump(self.personal_scores, f, indent=2)
         print("Scores saved.")
+
+    def reset_scores(self):
+        """Wipe the learned taste profile, in memory and on disk, so selection
+        goes back to using only emotion match + base art rating."""
+        self.personal_scores = {}
+        try:
+            if os.path.exists(SCORES_FILE):
+                os.remove(SCORES_FILE)
+        except OSError:
+            pass
+        print("Personal scores reset.")

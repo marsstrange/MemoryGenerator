@@ -1,3 +1,11 @@
+# The torch/torchvision below run on the CPU (works everywhere, but slower).
+#
+# Have an NVIDIA GPU? Get a big speedup by installing the GPU version instead:
+#   1. Skip the two torch lines below (leave the rest of this file as-is).
+#   2. Run this command:
+#        pip install torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytorch.org/whl/cu126
+#
+# That's it. camera.py uses the GPU automatically when the GPU version is installed.
 torch==2.12.0
 torchvision==0.27.0
 opencv-python==4.13.0.92

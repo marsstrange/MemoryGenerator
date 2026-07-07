@@ -43,7 +43,7 @@ VA_COORDS = {
     "surprise": ( 0.1,  0.9),
 }
 
-DEBUG_WINDOW = "Emotion Recognizer  |  Q to quit, D to toggle this window"
+DEBUG_WINDOW = "Emotion Recognizer  |  Q quit, D toggle window, R reset prefs"
 
 if torch.backends.mps.is_available():
     DEVICE = torch.device("mps")
@@ -285,7 +285,7 @@ def main():
     if not cap.isOpened():
         print("Cannot open camera.")
         return
-    print("Camera open. Press Q to quit, D to toggle this debug window.")
+    print("Camera open. Press Q to quit, D to toggle this debug window, R to reset preferences.")
     # WINDOW_NORMAL (not the default AUTOSIZE) so it can be resized/shrunk programmatically --
     # unlike AUTOSIZE, it doesn't auto-fit the image, so size it to the camera's native
     # resolution up front (otherwise it'd open at some small default size instead)
@@ -391,7 +391,15 @@ def main():
         gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
 
-        for (x, y, w, h) in faces:
+        if len(faces) > 0:
+            # Analyse only the primary face -- the largest one, which is almost always
+            # the person closest to / engaging with the camera. With several people in
+            # frame, reading every face would push conflicting /emotion, /valence and
+            # /arousal messages each frame and pollute the averaged selection window.
+            primary       = max(range(len(faces)), key=lambda i: faces[i][2] * faces[i][3])
+            x, y, w, h    = faces[primary]
+
+            # Crop before drawing anything, so overlay boxes never bleed into the crop
             face_crop                      = frame[y:y+h, x:x+w]
             emotion, conf, V, A, probs_np  = predict(model, face_crop)
             color                          = COLORS[emotion]
@@ -529,6 +537,11 @@ def main():
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             break
+        elif key == ord("r"):
+            # wipe the learned taste profile so selection is emotion-only again
+            if selector:
+                selector.reset_scores()
+                send_osc("/feedback", "reset")
         elif key == ord("d"):
             # shrink to near-nothing rather than destroying the window: with zero cv2
             # windows open, waitKey can lose OS keyboard focus entirely, and there'd be
