@@ -1,6 +1,7 @@
 import os
 import json
 import pickle
+import html
 import numpy as np
 
 _HERE          = os.path.dirname(os.path.abspath(__file__))
@@ -176,9 +177,9 @@ class PaintingSelector:
         return {
             "id":     best_id,
             "path":   os.path.join(IMG_DIR, best_id + ".jpg"),
-            "style":  p["style"],
-            "artist": p["artist"],
-            "title":  p["title"],
+            "style":  html.unescape(p["style"])  if p["style"]  else p["style"],
+            "artist": html.unescape(p["artist"]) if p["artist"] else p["artist"],
+            "title":  html.unescape(p["title"])  if p["title"]  else p["title"],
             "year":   p["year"],
         }
 

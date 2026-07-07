@@ -3,6 +3,7 @@ import sys
 import time
 import platform
 import subprocess
+import unicodedata
 import cv2
 import torch
 import torch.nn as nn
@@ -145,6 +146,13 @@ def draw_va_plot(frame, valence, arousal, size=220, margin=12):
                 (x0, y1 + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
 
 
+def _ascii(text):
+    """OpenCV's Hershey fonts (used by cv2.putText) can only render a narrow ASCII-ish
+    set -- accented letters etc. show up as '?' placeholders. Strip diacritics down to
+    their plain-ASCII base letter so painting metadata always renders cleanly."""
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
+
 def draw_painting_info(frame, painting, score=0.0):
     """Bottom-left overlay: current painting info + style + score."""
     fh = frame.shape[0]
@@ -154,9 +162,9 @@ def draw_painting_info(frame, painting, score=0.0):
 
     style = "-"
     if painting:
-        artist = painting.get("artist", "")[:30]
-        title  = painting.get("title",  "")[:35]
-        style  = painting.get("style", style)
+        artist = _ascii(painting.get("artist", ""))[:30]
+        title  = _ascii(painting.get("title",  ""))[:35]
+        style  = _ascii(painting.get("style", style))
         cv2.putText(frame, f"{artist} - {title}",
                     (8, fh - 64), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
 
@@ -321,10 +329,15 @@ def main():
             overlay = img.copy()
             cv2.rectangle(overlay, (0, ih - 50), (iw, ih), (15, 15, 15), -1)
             cv2.addWeighted(overlay, 0.6, img, 0.4, 0, img)
-            cv2.putText(img, f"{painting['title']} ({painting['year']})",
-                        (8, ih - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
-            cv2.putText(img, f"{painting['artist']} - {painting['style']}",
-                        (8, ih - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 220, 255), 1)
+
+            font, font_scale = cv2.FONT_HERSHEY_SIMPLEX, 0.45
+            artist_text = f"{_ascii(painting['artist'])} - "
+            (artist_w, _), _ = cv2.getTextSize(artist_text, font, font_scale, 1)
+            cv2.putText(img, artist_text, (8, ih - 30), font, font_scale, (220, 220, 220), 1)
+            cv2.putText(img, _ascii(painting["title"]), (8 + artist_w, ih - 30), font, font_scale, (180, 220, 255), 1)
+
+            cv2.putText(img, f"{painting['year']}, {_ascii(painting['style'])}",
+                        (8, ih - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (150, 150, 150), 1)
 
             cv2.imshow("Painting", img)
 
@@ -468,6 +481,12 @@ def main():
             last_dynamic = None
             ok_streak    = 0
             ok_consumed  = False
+
+        # ── mode indicator ──────────────────────────────────────────────────────
+        mode_text  = "PARTICLES (swipes disabled)" if particles_active else "SWIPE"
+        mode_color = (255, 120, 255) if particles_active else (255, 255, 255)
+        cv2.putText(frame, f"Mode: {mode_text}", (10, 86),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, mode_color, 2)
 
         # ── painting info overlay ─────────────────────────────────────────────
         if selector:

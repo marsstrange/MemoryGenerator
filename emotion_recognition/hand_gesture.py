@@ -47,6 +47,7 @@ class HandGestureDetector:
         self._size_hist  = deque(maxlen=history_len)
         self._last_dyn   = None
         self._dyn_ttl    = 0
+        self._open_miss  = 0
 
     # ── helpers ────────────────────────────────────────────────────────────
 
@@ -104,7 +105,7 @@ class HandGestureDetector:
         if middle and ring and pinky and not index:
             pinch   = math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y)
             palm_w  = math.hypot(lm[5].x - lm[17].x, lm[5].y - lm[17].y)
-            if pinch < palm_w * 0.35:
+            if pinch < palm_w * 0.45:
                 return "ok"
 
         if index and not middle and not ring and not pinky:           return "point"
@@ -121,11 +122,17 @@ class HandGestureDetector:
             self._dyn_ttl -= 1
             return self._last_dyn
 
-        # Only track open hand
+        # Only track open hand, but tolerate a few stray non-"open" frames in a row --
+        # fast motion blurs the landmarks, which briefly flips the finger-state heuristic,
+        # and clearing history on every such blip made real swipes rarely finish accumulating
         if static != "open":
-            self._pos_hist.clear()
-            self._size_hist.clear()
+            self._open_miss += 1
+            if self._open_miss > 3:
+                self._pos_hist.clear()
+                self._size_hist.clear()
+                self._open_miss = 0
             return None
+        self._open_miss = 0
 
         # New sequence must begin near frame center
         near_center = abs(px - 0.5) < 0.25 and abs(py - 0.5) < 0.25
