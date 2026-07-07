@@ -316,6 +316,16 @@ def main():
             h, w = img.shape[:2]
             scale = 600 / max(h, w)
             img = cv2.resize(img, (int(w * scale), int(h * scale)))
+
+            ih, iw = img.shape[:2]
+            overlay = img.copy()
+            cv2.rectangle(overlay, (0, ih - 50), (iw, ih), (15, 15, 15), -1)
+            cv2.addWeighted(overlay, 0.6, img, 0.4, 0, img)
+            cv2.putText(img, f"{painting['title']} ({painting['year']})",
+                        (8, ih - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
+            cv2.putText(img, f"{painting['artist']} - {painting['style']}",
+                        (8, ih - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 220, 255), 1)
+
             cv2.imshow("Painting", img)
 
     def select_new_painting():

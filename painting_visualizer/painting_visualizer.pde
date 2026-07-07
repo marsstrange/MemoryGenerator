@@ -33,6 +33,12 @@ final float SCATTER_DECAY           = 0.90; // per-frame decay of the burst
 
 boolean returning = false;  // fist gesture: pull particles back to origin
 
+// ── ok-sign toggle ──────────────────────────────────────────────────────────
+// particles ignore hand movement until "ok" is shown once, then follow the hand
+// normally until "ok" is shown again to stop. Decided in camera.py (single source of
+// truth, also gates swipe navigation there) and mirrored here via /particles_active.
+boolean particlesEnabled = false;
+
 float[] gradAngle;
 float[] gradMag;
 
@@ -65,8 +71,8 @@ void draw() {
   float palmForceX = constrain(sPalmDX * PALM_GAIN, -1, 1);
   float palmForceY = constrain(sPalmDY * PALM_GAIN, -1, 1);
 
-  // closer palm (bigger hand_size) => zoom in; no hand => relax back to 1.0
-  float targetZoom = handPresent ? map(handSize, 0.1, 0.4, 0.7, 1.6) : 1.0;
+  // closer palm (bigger hand_size) => zoom in; no hand, or particle-follow off => relax back to 1.0
+  float targetZoom = (handPresent && particlesEnabled) ? map(handSize, 0.1, 0.4, 0.7, 1.6) : 1.0;
   sZoom = lerp(sZoom, constrain(targetZoom, 0.5, 2.0), 0.05);
 
   scatterEnergy *= SCATTER_DECAY;   // burst fades on its own; oscEvent re-tops it up while approach stays fast
@@ -164,13 +170,15 @@ void oscEvent(OscMessage msg) {
   else if (addr.equals("/arousal")) arousal = msg.get(0).floatValue();
   else if (addr.equals("/palm_x")) {
     float nx = msg.get(0).floatValue();
-    palmDX = nx - palmX;          // delta since last message = instantaneous x-movement
+    // baseline always tracked so there's no jump when it's re-enabled, but the
+    // delta only feeds particle movement while particlesEnabled is true
+    palmDX = particlesEnabled ? (nx - palmX) : 0;
     palmX  = nx;
     lastHandMsgTime = millis();   // mark hand as "seen" so draw() doesn't decay push/zoom to neutral
   }
   else if (addr.equals("/palm_y")) {
     float ny = msg.get(0).floatValue();
-    palmDY = ny - palmY;          // delta since last message = instantaneous y-movement
+    palmDY = particlesEnabled ? (ny - palmY) : 0;
     palmY  = ny;
     lastHandMsgTime = millis();
   }
@@ -178,12 +186,15 @@ void oscEvent(OscMessage msg) {
     String g = msg.get(0).stringValue();
     returning = g.equals("fist");
   }
+  else if (addr.equals("/particles_active")) {
+    particlesEnabled = msg.get(0).intValue() != 0;
+  }
   else if (addr.equals("/hand_size")) {
     float ns    = msg.get(0).floatValue();
     float delta = ns - handSize;             // growth rate = how fast the palm is approaching
     handSize = ns;
     lastHandMsgTime = millis();
-    if (delta > SCATTER_DELTA_THRESHOLD) scatterEnergy = 1.0;
+    if (particlesEnabled && delta > SCATTER_DELTA_THRESHOLD) scatterEnergy = 1.0;
   }
 }
 
