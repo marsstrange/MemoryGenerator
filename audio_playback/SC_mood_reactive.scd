@@ -12,6 +12,9 @@ s.waitForBoot({
 
 "calm_synthdefs.scd".loadRelative;
 
+// sample for \glassBreakGrain's granular "push position" voice (see calm_synthdefs.scd)
+~glassBuf = Buffer.read(s, thisProcess.nowExecutingPath.dirname +/+ "samples/glass break normal.wav");
+
 thisProcess.openUDPPort(12001);
 
 ~clock = TempoClock.default;
@@ -217,6 +220,17 @@ SynthDef(\palmVoice, { |out = 0, pan = 0, cutoff = 1200, amp = 0, room = 0.6|
     Out.ar(out, Pan2.ar(sig, pan.clip(-1, 1)));
 }).add;
 
+// SynthDef(...).add is async -- without this, ~initAudioState.value below can try to
+// instantiate \palmVoice (or anything from calm_synthdefs.scd) before the server has
+// actually confirmed it finished compiling, causing "SynthDef not found" errors
+s.sync;
+
+// numFrames == 0 (or a giant/bogus number) means the path didn't resolve to a real file --
+// this only prints something meaningful because it runs after s.sync, once the async
+// Buffer.read has actually completed
+("glass sample loaded: " ++ ~glassBuf.numFrames ++ " frames, "
+    ++ ~glassBuf.numChannels ++ " channel(s), path=" ++ ~glassBuf.path).postln;
+
 ~handTimeout      = 0.3;
 ~scatterThreshold = 0.05;  // hand_size jump per message counted as "fast approach"
 
@@ -243,6 +257,9 @@ SynthDef(\palmVoice, { |out = 0, pan = 0, cutoff = 1200, amp = 0, room = 0.6|
     ~currentScapeName = nil;
     ~mood             = (valence: 0.0, arousal: 0.0, emotion: \neutral);
     ~lastHandSize     = 0;
+    ~particlesActive  = false;  // mirrors camera.py's /particles_active toggle
+    ~glassSynth       = nil;    // currently-playing \glassBreakGrain, if any (see /push_active)
+    ~glassPlaying     = false;
 
     ~palm = Synth(\palmVoice, [\amp, 0], ~padGroup);
 
@@ -308,8 +325,10 @@ OSCdef(\handSizeRx, { |msg|
     var size  = msg[1];
     var delta = size - ~lastHandSize;
     ~palm.set(\room, size.linlin(0.1, 0.4, 0.8, 0.2));   // closer -> drier/closer-sounding
-    if (delta > ~scatterThreshold) {
-        // fast approach -> impact accent, mirrors the visual particle scatter burst
+    // fast approach -> impact accent, mirrors the visual particle scatter burst. Only outside
+    // particle-follow mode -- in that mode /push_active drives the glass-break voice instead,
+    // and this independent trigger would otherwise still fire the bell alongside/over it
+    if (delta > ~scatterThreshold and: { ~particlesActive.not }) {
         Synth.tail(~padGroup, \calmBell, [\freq, 300, \amp, 0.15, \rel, 3]);
     };
     ~lastHandSize = size;
@@ -322,12 +341,40 @@ OSCdef(\feedbackRx, { |msg|
     Synth.tail(~padGroup, \calmPluck, [\freq, freq, \amp, 0.12, \rel, 3]);
 }, '/feedback');
 
+OSCdef(\particlesActiveRx, { |msg|
+    ~particlesActive = msg[1] > 0;
+    ("particles_active -> " ++ ~particlesActive).postln;
+}, '/particles_active');
+
+// Sustained on/off from camera.py's hand_size hysteresis (not a one-shot event) -- the
+// granular glass-break voice plays for exactly as long as /push_active stays 1, regardless
+// of how long that turns out to be, by releasing its gate the instant it goes back to 0.
+OSCdef(\pushActiveRx, { |msg|
+    var active = msg[1] > 0;
+    ("push_active -> " ++ active ++ " (glassPlaying was " ++ ~glassPlaying ++ ")").postln;
+    if (active and: { ~glassPlaying.not }) {
+        ~glassSynth = Synth.tail(~padGroup, \glassBreakGrain, [\buf, ~glassBuf, \amp, 0.3, \gate, 1]);
+        ~glassPlaying = true;
+        "-> started glassBreakGrain".postln;
+    };
+    if (active.not and: { ~glassPlaying }) {
+        ~glassSynth.set(\gate, 0);
+        ~glassPlaying = false;
+        "-> released glassBreakGrain".postln;
+    };
+}, '/push_active');
+
 OSCdef(\dynamicRx, { |msg|
     var gesture = msg[1].asSymbol;
     case
     { gesture == \swipe_left  } { Synth.tail(~padGroup, \calmPluck, [\freq, 500, \amp, 0.1,  \rel, 2]) }
     { gesture == \swipe_right } { Synth.tail(~padGroup, \calmPluck, [\freq, 700, \amp, 0.1,  \rel, 2]) }
-    { gesture == \push        } { Synth.tail(~padGroup, \calmBell,  [\freq, 200, \amp, 0.18, \rel, 4]) };
+    { gesture == \push        } {
+        // in particle-follow mode, /push_active above drives the glass-break voice instead
+        if (~particlesActive.not) {
+            Synth.tail(~padGroup, \calmBell, [\freq, 200, \amp, 0.18, \rel, 4]);
+        };
+    };
 }, '/dynamic');
 
 // camera.py sends this from its try/finally on exit — normal quit, crash, or Ctrl+C.

@@ -310,6 +310,14 @@ def main():
                              # (a single misclassified frame, e.g. motion blur during a fast
                              # push, won't reach this and won't flip the toggle)
 
+    # "push position" -- hand held close to the camera, particle-follow mode only. Sent as a
+    # sustained on/off signal (not a one-shot event) so the granular glass-break sound in SC
+    # can play for exactly as long as the palm stays in this position. Hysteresis (enter/exit
+    # thresholds differ) avoids flicker right at the boundary.
+    push_active      = False
+    PUSH_SIZE_ENTER  = 0.30
+    PUSH_SIZE_EXIT   = 0.26
+
     painting_history = []  # every painting shown, in order, so swipes can browse back/forward
     painting_pos     = -1  # index into painting_history
 
@@ -421,6 +429,9 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.putText(frame, f"dynamic: {dynamic}", (10, 58),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            # temporary readout for calibrating PUSH_SIZE_ENTER/EXIT against this camera's framing
+            cv2.putText(frame, f"hand_size: {hand['hand_size']:.3f}  (push>{PUSH_SIZE_ENTER})",
+                        (10, 114), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 100), 2)
 
             # "ok" held for a few net frames toggles particle-follow mode. Leaky counter
             # (decays instead of hard-resetting) so a stray misclassified frame -- common
@@ -436,6 +447,19 @@ def main():
                 ok_streak = max(ok_streak - 1, 0)
                 if ok_streak == 0:
                     ok_consumed = False
+
+            # Sustained "push position" signal, particle-follow mode only -- drives the
+            # granular glass-break sound in SC for exactly as long as the palm stays close
+            if particles_active:
+                if not push_active and hand["hand_size"] > PUSH_SIZE_ENTER:
+                    push_active = True
+                    send_osc("/push_active", 1)
+                elif push_active and hand["hand_size"] < PUSH_SIZE_EXIT:
+                    push_active = False
+                    send_osc("/push_active", 0)
+            elif push_active:
+                push_active = False
+                send_osc("/push_active", 0)
 
             if selector and current_painting:
                 # Static gesture → feedback with 5s cooldown per gesture type
@@ -481,6 +505,9 @@ def main():
             last_dynamic = None
             ok_streak    = 0
             ok_consumed  = False
+            if push_active:
+                push_active = False
+                send_osc("/push_active", 0)
 
         # ── mode indicator ──────────────────────────────────────────────────────
         mode_text  = "PARTICLES (swipes disabled)" if particles_active else "SWIPE"

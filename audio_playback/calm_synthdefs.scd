@@ -344,4 +344,28 @@ SynthDef(\popHat, { |out = 0, amp = 0.04|
     Out.ar(out, sig ! 2);
 }).add;
 
+// "push position" voice for particle-follow mode — granular playback of a glass-break
+// sample (buf, set by SC_mood_reactive.scd) instead of the sample-free synthesis used
+// everywhere else, since the brief wants an actual recorded glass-break texture. Gated by
+// gate rather than a fixed envelope: SC_mood_reactive.scd sets gate=0 the instant
+// /push_active reports the palm has left the push position, so the sustained portion's
+// length always matches however long the palm was held there, however long that turns out
+// to be — the attack/release are just short shaping around that variable-length hold.
+SynthDef(\glassBreakGrain, { |out = 0, buf = 0, amp = 0.3, gate = 1|
+    var env, trig, pos, dur, rate, pan, grain, sig;
+
+    env = EnvGen.kr(Env.asr(0.05, 1, 0.4), gate, doneAction: 2);
+
+    trig = Dust.kr(30);                      // grain density
+    pos  = TRand.kr(0, 1, trig);              // scrub position within the buffer, 0-1
+    dur  = TRand.kr(0.05, 0.15, trig);        // grain length
+    rate = TRand.kr(0.7, 1.4, trig);          // per-grain playback-rate jitter -> pitch variety
+    pan  = TRand.kr(-1, 1, trig);
+
+    grain = GrainBuf.ar(2, trig, dur, buf, rate, pos, 2, pan, -1);
+    sig   = grain * env * amp;
+
+    Out.ar(out, sig);
+}).add;
+
 "Calm SynthDefs loaded.".postln;
