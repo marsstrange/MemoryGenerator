@@ -1,9 +1,6 @@
-# MemoryGenerator
+# ParticlArt
 
 An interactive installation where your face and your hands compose the room around a painting.
-
-> The previous version of this document is kept at [`readme_original.md`](readme_original.md).
-
 ---
 
 ## What it is
