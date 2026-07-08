@@ -1,4 +1,4 @@
-CPAC Project
+CPAC Project - ParticlArt
 ==============
 
 # 1) Project description
