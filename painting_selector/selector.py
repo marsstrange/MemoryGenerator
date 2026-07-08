@@ -255,7 +255,7 @@ class PaintingSelector:
 
     def feedback(self, painting_id, gesture=None, seconds_shown=0):
         """
-        gesture: "thumbs_up", "thumbs_down", "ok", or None (passive timeout)
+        gesture: "thumbs_up", "thumbs_down", or None (passive timeout)
         seconds_shown: how long the painting was displayed
         """
         if painting_id not in self.paintings:
@@ -265,8 +265,6 @@ class PaintingSelector:
             score += 1.0
         elif gesture == "thumbs_down":
             score -= 1.5
-        elif gesture == "ok":
-            score += 0.5
         elif gesture is None and seconds_shown >= 20:
             score += 0.2
         self.personal_scores[painting_id] = max(-3.0, min(3.0, score))
