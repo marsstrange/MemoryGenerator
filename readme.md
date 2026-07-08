@@ -31,17 +31,8 @@ offer a small emotional journey through art history instead of a wall label.
 Three programs run at once, talking only to each other over OSC on the loopback interface
 (`127.0.0.1`) — nothing leaves the machine.
 
-```
-        ┌─────────────┐        OSC / 127.0.0.1        ┌───────────────────────┐
- webcam │   Python     │ ─────────────────────────────▶│   Processing          │
- ──────▶│ camera.py    │        (port 12000)            │  painting + particles │
-        │              │                                 └───────────────────────┘
-        │ • emotion     │
-        │ • gestures    │        OSC / 127.0.0.1        ┌───────────────────────┐
-        │ • selection   │ ─────────────────────────────▶│   SuperCollider       │
-        └─────────────┘        (port 12001)             │   soundscape engine   │
-                                                          └───────────────────────┘
-```
+<img width="651" height="371" alt="diagram" src="https://github.com/user-attachments/assets/e3c3da8c-775d-4fd3-8550-a5d74146e7f0" />
+
 
 1. **Sensing** — a webcam frame is captured (`emotion_recognition/camera.py`).
 2. **Interpreting** — a Haar Cascade locates the primary face; a ResNet50-based two-head network
