@@ -1,86 +1,250 @@
-CPAC Project - ParticlArt
-==============
+# MemoryGenerator
 
-# 1) Project description
+An interactive installation where your face and your hands compose the room around a painting.
 
-This project is an interactive audiovisual installation designed to create a dynamic and immersive atmosphere that responds to human presence and behavior. A camera quietly watches a visitor; from their facial expression it estimates an emotional state. In response it surfaces a painting from art history whose emotional character resonates with that feeling, drawn from thousands of works in the WikiArt Emotions dataset.
+> The previous version of this document is kept at [`readme_original.md`](readme_original.md).
 
-It was envisioned as something that belongs in a gallery or museum: a way to spark a visitor's curiosity and draw their attention toward a specific artwork. The idea is to offer a small emotional journey through art history. 
+---
 
-The user steps in front of the screen, their face is detected and their expression is read live. A painting that echoes their mood appears, accompanied by a generative soundscape whose character matches the painting's artistic style and their emotional valence/arousal. Simple hand gestures let them interact without touching anything. They can swipe to move through paintings and styles, thumbs-up/down to teach it their taste (which it remembers across sessions), and an "OK" sign to enter a mode where their hand stirs the artwork into a cloud of drifting particles. 
+## What it is
 
-Sound is generated in real time using SuperCollider, while Processing is responsible for the visual component. Machine learning models are used for facial expression and hand-gesture recognition. Communication between the different modules is handled through Python and the Open Sound Control (OSC) protocol, ensuring seamless real-time interaction.
+A single webcam reads a visitor's facial expression and hand gestures in real time. Those
+signals decide which painting from a 4,000+ work archive appears, how its pixels dissolve into
+a living field of particles, and what generative soundscape fills the space around it — no
+screen, no wall text, no controller.
 
-By bringing together sound synthesis, visual art, computer vision, and machine learning, everything reacts continuously and the installation feels alive and personal.
+It's designed for a gallery or museum context: a way to make a painting notice you back, and to
+offer a small emotional journey through art history instead of a wall label.
 
+- **Emotion in → painting out.** A 7-class facial emotion model (with continuous valence/arousal)
+  is projected into the WikiArt Emotions dataset's 20-dimensional affective space, and the
+  closest-matching, still-fresh, aesthetically-strong painting is selected via cosine similarity.
+- **Gesture in → interaction out.** Swipes browse paintings and styles; thumbs up/down teach the
+  system your taste (persisted across sessions); an "OK" sign toggles a mode where your hand
+  stirs the painting into a particle cloud, scattering it on a push and pulling it back together
+  on a retreat.
+- **Everything out → sound + visuals.** The painting's style picks one of five fully distinct
+  synthesised soundscapes; gestures and mood continuously shape both the sound and the particle
+  system live, so the image and the audio move as one.
 
+---
 
-# 2) Challenges & Accomplishments & Lessons
+## How it works
 
-The hardest part was making the 4 distinct tools that we used work as a coherent, real time system over OSC. These are computer vision, a PyTorch emotion model, SuperCollider for sound, and Processing for visuals. Designing generative audio that doesn't feel chaotic was another challenge.  Translating the facial emotion into the emotional space of the WikiArt dataset, while staying coherent, was also difficult. 
+Three programs run at once, talking only to each other over OSC on the loopback interface
+(`127.0.0.1`) — nothing leaves the machine.
 
-Accomplishments: A fully working installation where a face and a hand simultaneously drive image selection, a generative soundscape, and reactive visuals live. The sound engine is synthesis-only, and the recommender is able to keep the experience fresh and even remembers a visitor's taste across sessions.
+```
+        ┌─────────────┐        OSC / 127.0.0.1        ┌───────────────────────┐
+ webcam │   Python     │ ─────────────────────────────▶│   Processing          │
+ ──────▶│ camera.py    │        (port 12000)            │  painting + particles │
+        │              │                                 └───────────────────────┘
+        │ • emotion     │
+        │ • gestures    │        OSC / 127.0.0.1        ┌───────────────────────┐
+        │ • selection   │ ─────────────────────────────▶│   SuperCollider       │
+        └─────────────┘        (port 12001)             │   soundscape engine   │
+                                                          └───────────────────────┘
+```
 
-Lessons learned: We learned how to better design a real time multi-stage system. We also learned that continuous signals (like valence/arousal and windowed motion) make an installation feel much more more alive than discrete on/off states, and that a huge share of the success lies in mapping and tuning, not in the models themselves. On the audio side, we saw that the line between generative and random is hard to draw and control but we learned how to use this fine line between them as a deliberate design choice.
+1. **Sensing** — a webcam frame is captured (`emotion_recognition/camera.py`).
+2. **Interpreting** — a Haar Cascade locates the primary face; a ResNet50-based two-head network
+   (`emotion_recognition/train.py`) classifies 7 emotions and regresses continuous
+   valence/arousal. MediaPipe's Hand Landmarker tracks 21 hand keypoints; hand-authored geometric
+   rules turn those into static poses, swipes/waves/pushes, and continuous streams
+   (`emotion_recognition/hand_gesture.py`).
+3. **Deciding** — the averaged emotion probabilities are mapped into WikiArt's 20-dim emotion
+   space and matched against the painting archive by cosine similarity, weighted by aesthetic
+   rating, personal taste score, and a CLIP-embedding diversity penalty so paintings don't repeat
+   or look too similar back-to-back (`painting_selector/selector.py`).
+4. **Expressing** — every signal (emotion, valence/arousal, gestures, palm position, hand
+   distance, painting metadata) streams out over OSC to Processing and SuperCollider, which react
+   continuously and independently — see the module breakdown below.
 
-# 3) Technology
-- PyTorch (ResNet50 emotion model with valence/arousal)
-- OpenCV 
+### Emotion recognition
+
+- ResNet50 backbone pretrained on ImageNet; only the last residual block and two new output
+  heads are fine-tuned, keeping ImageNet's general visual features intact.
+- Two heads share one 2048-d feature vector: a 7-class classifier (angry, disgust, fear, happy,
+  neutral, sad, surprise) and a `Tanh`-bounded regression head for valence/arousal, trained
+  against a fixed per-class target coordinate on the circumplex model of affect — so it learns to
+  interpolate continuously between categories rather than only ever outputting one of seven fixed
+  points.
+- Trained on FER-2013-style data (`emotion_recognition/train.py`); the shipped checkpoint lives
+  at `emotion_recognition/checkpoints/best_model.pth`.
+
+### Gesture recognition
+
+MediaPipe's pretrained Hand Landmarker is used off the shelf — no gesture-specific training.
+Everything past the 21 keypoints it returns is hand-authored geometry: joint angles and
+distances classify static poses; a short rolling window of palm position/hand size classifies
+swipes, waves and pushes.
+
+| Static poses | Dynamic gestures | Continuous streams |
+| :--- | :--- | :--- |
+| open, fist, thumbs up, thumbs down, OK, point, peace | swipe left/right/up/down, wave, push | palm X/Y, hand size, windowed hand-size delta, pinch, spread, wrist angle |
+
+### Visuals — Processing (`painting_visualizer/painting_visualizer.pde`)
+
+The selected painting is resampled into a field of colored particles, each carrying its source
+pixel color and its own origin point. Idle, particles drift gently along the painting's own
+brightness-gradient field plus a touch of Perlin-noise wander and Brownian jitter, so the image
+never looks perfectly frozen. While particle-follow mode is on (toggled with the OK sign), the
+palm steers particle direction, hand distance zooms the canvas, a fast approach scatters the
+particles outward, and a fast retreat magnetizes them back into place.
+
+### Sound — SuperCollider (`audio_playback/SC_mood_reactive.scd` + `calm_synthdefs.scd`)
+
+Every synthesis path is generated, not sampled. Each painting style resolves to one of five
+soundscapes, each with a genuinely different synthesis technique — not just a different scale on
+the same patch:
+
+| Style family | Synthesis approach |
+| :--- | :--- |
+| Classical | granular sine-grain cloud |
+| Expressionist | unstable FM + bitcrush |
+| Abstract | additive drone of independent partials |
+| Impressionist | modal/resonant filter bank |
+| Pop | rhythmic subtractive pulse bass |
+
+Hand position and mood shape the sound continuously (palm height opens/closes a filter, hand
+distance controls reverb size, valence/arousal steer the pad), and in particle mode, a push
+triggers a synthesised "shatter" while a retreat triggers its literal time-reverse — a
+synthesised "re-forming" sound, sustained for as long as the palm stays in that retreated
+position.
+
+---
+
+## Setup
+
+### 1. Python environment
+
+```bash
+pip install -r requirements.txt
+```
+
+Runs on CPU by default. If you have an NVIDIA GPU, install the CUDA build instead for a big
+speedup — see the comment at the top of `requirements.txt`.
+
+### 2. Emotion model
+
+Either train your own or use the shipped checkpoint at
+`emotion_recognition/checkpoints/best_model.pth`. To train from scratch:
+
+1. Download [FER-2013](https://www.kaggle.com/datasets/msambare/fer2013) and unzip it into
+   `emotion_recognition/data/` (see `emotion_recognition/README.md` for the expected folder
+   layout).
+2. `python emotion_recognition/train.py`
+3. Best checkpoint is written to `emotion_recognition/checkpoints/best_model.pth`.
+
+### 3. Painting archive
+
+1. Download the [WikiArt Emotions](https://saifmohammad.com/WebPages/wikiartemotions.html)
+   annotations into `painting_selector/data/WikiArt-Emotions/` (see
+   `painting_selector/README.md` for the exact file layout expected).
+2. `python painting_selector/download_images.py` — pulls ~4,000 paintings (~1–2 GB, a few
+   minutes).
+3. `python painting_selector/precompute.py` — computes each painting's 20-dim emotion vector and
+   CLIP embedding, saving to `painting_selector/data/paintings.pkl` (~10–15 min).
+
+### 4. SuperCollider and Processing
+
+Both need to be installed (SuperCollider for the sound engine, Processing with the `oscP5`
+library for the visuals — Sketch → Import Library → Add Library → search "oscP5"). You don't
+need to launch either by hand: see **Running it** below.
+
+---
+
+## Running it
+
+```bash
+cd emotion_recognition
+python camera.py
+```
+
+This single command:
+
+- auto-launches SuperCollider in the background and boots `SC_mood_reactive.scd` (skipped if SC
+  is already running);
+- opens `painting_visualizer.pde` in the Processing IDE for you — **press Run inside Processing
+  once it opens** (it isn't started automatically, to leave you in control of when the visual
+  window appears);
+- opens a debug camera window showing your face/hand tracking, current gesture, mode, and the
+  selected painting's info.
+
+### Keyboard controls (debug window)
+
+| Key | Effect |
+| :--- | :--- |
+| `q` | Quit |
+| `r` | Reset your learned taste profile (personal scores) |
+| `d` | Toggle the debug overlay window |
+
+### Gesture controls
+
+| Gesture | Effect |
+| :--- | :--- |
+| thumbs up / thumbs down | Score the current painting up/down (5 s cooldown per gesture) |
+| OK (held briefly) | Toggle particle-follow mode |
+| swipe left / right | Previous / next painting *(swipe mode only)* |
+| swipe up / down | Next / previous style — always lands on a different soundscape family too *(swipe mode only)* |
+| push toward camera *(particle mode)* | Scatter the particles + synthesised "shatter" sound |
+| retreat *(particle mode)* | Magnetize particles back together + the shatter sound's time-reverse |
+| fist *(particle mode)* | Snap particles straight back to their origin |
+
+Swipes are disabled while particle-follow mode is active, so the two gesture vocabularies never
+collide.
+
+---
+
+## Project structure
+
+```
+MemoryGenerator/
+├── emotion_recognition/    Python: webcam capture, emotion model, gesture recognition, OSC hub
+├── painting_selector/      Painting archive + emotion-matching / diversity logic
+├── painting_visualizer/    Processing sketch: painting → particle system
+├── audio_playback/         SuperCollider: soundscape engine + SynthDefs
+├── scripts/                Auto-launch scripts for SuperCollider / Processing
+└── resources/              Diagrams and reference material
+```
+
+---
+
+## Technology
+
+- PyTorch (ResNet50-based emotion model with valence/arousal regression)
+- OpenCV (face detection)
 - MediaPipe (hand tracking)
-- CLIP / HuggingFace Transformers (visual embeddings)
+- CLIP / HuggingFace Transformers (visual diversity embeddings)
 - NumPy / pandas · WikiArt Emotions dataset
 - SuperCollider (real-time generative synthesis)
 - Processing + oscP5 (particle-system visuals)
 - OSC via python-osc
-- Git LFS.
-  
-Concepts: real-time computer vision, facial emotion recognition, gesture recognition, content-based retrieval and cosine similarity, embedding-based diversity, audio–visual synchronization, generative sound design, particle systems.
 
+**Concepts:** real-time computer vision, facial emotion recognition, gesture recognition,
+content-based retrieval and cosine similarity, embedding-based diversity, audio–visual
+synchronization, generative sound design, particle systems.
 
+---
 
+## Known limitations & possible next steps
 
-# 4) Project technical overview
+- `wave`, `peace` and `point` are recognised but not yet mapped to any behaviour.
+- Wrist rotation, pinch, and spread are broadcast over OSC but currently unused — free
+  parameters for a future soundscape or visual layer.
+- Gesture thresholds are hand-tuned; a per-visitor or per-lighting calibration pass would make
+  recognition more robust across different rooms/cameras.
+- The installation currently listens to one visitor at a time — multi-hand or multi-visitor
+  input is the natural next step.
 
-The installation runs as four cooperating modules that communicate in real time over OSC. The Python program reads the webcam, interprets the visitor with machine-learning models, chooses a matching painting, and sends the resulting signals to the sound engine (SuperCollider) and a visual engine (Processing), which react in real time.
+---
 
-![Project pipeline](resources/project_pipeline.png)
+## Lessons learned
 
-The data flows in four stages:
-
-1. **Sensing** — a webcam frame is captured (`emotion_recognition/camera.py`).
-2. **Interpreting** — ML models extract the visitor's facial emotion and hand gestures.
-3. **Deciding** — the emotion drives selection of an emotionally matching painting (`painting_selector/`).
-4. **Expressing** — all signals are sent over OSC to SuperCollider and Processing.
-
-## a) Feature extraction from sensors
-
-All input comes from a single webcam, and two machine-learning pipelines run on each frame.
-
-**Facial emotion.** The largest ("primary") face in the frame is located with OpenCV, cropped, and passed to a ResNet50-based model (`emotion_recognition/checkpoints/best_model.pth`, trained on FER-2013-style data with `train.py`). It outputs a 7-class emotion probability distribution together with a continuous *valence* (negative↔positive) and *arousal* (calm↔excited) estimate.
-
-**Hand gestures.** Google MediaPipe's Hand Landmarker returns 21 hand landmarks, from which lightweight geometric rules derive both discrete gestures and continuous control signals. No separate model training is required.
-
-The features extracted are:
-
-| Facial emotion (7-class) | Static hand shapes | Dynamic hand motions | Continuous signals |
-| :--- | :--- | :--- | :--- |
-| angry, disgust, fear, happy, neutral, sad, surprise | open, fist, thumbs up, thumbs down, OK, point, peace | swipe left / right / up / down, wave, push | valence, arousal, palm X/Y, hand size (distance), pinch, spread, wrist angle, windowed size-delta |
-
-## b) Mapping features to output
-
-**Emotion → painting (`painting_selector/selector.py`).** The facial emotion probabilities, averaged over a short window, are mapped into WikiArt's 20-dimensional emotion space. Paintings are then ranked by cosine similarity to that vector, weighted by each work's average art rating and by the visitor's personal score. The system avoids paintings that look too similar to recent ones or repeat the same style, and it adds a touch of randomness when picking from the best matches. Visual similarity uses CLIP image embeddings.
-
-**Signals → sound (OSC → SuperCollider).** The current painting's artistic style selects one of five soundscapes (classical, expressionist, abstract, impressionist, pop). Valence shifts major/minor tonality, arousal drives tempo, density and amplitude; palm position and hand distance modulate pan, filter and reverb; and in particle mode a fast hand push or retreat triggers synchronized glass break/regroup sounds.
-
-**Signals → visuals (OSC → Processing).** The current painting is rebuilt as a field of colored particles that flow along the image's brightness gradient; palm movement pushes the particles, hand distance zooms, arousal sets the flow speed, and the same windowed push/retreat signal used by the sound scatters or magnetizes the particles. So image and audio move as one.
-
-**Learning the visitor's taste.** A thumbs-up or thumbs-down adjusts a persistent per-painting score that biases future selection. It is saved between sessions and can be reset live (the `R` key). The OK sign is reserved for toggling particle mode and no longer affects taste.
-
-## c) Visuals generation (Processing)
-`painting_visualizer/painting_visualizer.pde` turns the selected painting into a particle system: each particle is seeded from a painting pixel and steered by the painting's brightness-gradient field. An OK gesture toggles a particle follow mode in which the hand pushes, scatters, and regroups the particles. A subtle brownian jitter keeps the image alive even when no one is interacting. The sketch also renders the artwork itself and lets it slowly dissolve into its own particles.
-
-## d) Sound generation (SuperCollider)
-`audio_playback/SC_mood_reactive.scd` (with `calm_synthdefs.scd`) is a fully synthesis based sound engine. Each of the five soundscapes has its traits, chosen by painting style and continuously shaped by valence and arousal. A palm-driven voice tracks the hand, gesture accents and everything crossfades smoothly as paintings and moods change.
-
-
-
+The hardest part was making four distinct tools — computer vision, a PyTorch emotion model,
+SuperCollider, and Processing — behave as one coherent, real-time system over OSC. Designing
+generative audio that doesn't feel chaotic, and mapping facial emotion into WikiArt's affective
+space in a way that stays coherent, were the two toughest design problems. Continuous signals
+(valence/arousal, windowed motion) turned out to make the installation feel far more alive than
+discrete on/off states — and a large share of the eventual result came down to mapping and
+tuning, not the underlying models themselves.
