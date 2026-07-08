@@ -82,13 +82,5 @@ The features extracted are:
 ## d) Sound generation (SuperCollider)
 `audio_playback/SC_mood_reactive.scd` (with `calm_synthdefs.scd`) is a fully synthesis based sound engine. Each of the five soundscapes has its traits, chosen by painting style and continuously shaped by valence and arousal. A palm-driven voice tracks the hand, gesture accents and everything crossfades smoothly as paintings and moods change.
 
-# 5) Students: the members of the group with a sentence that explains for each person what was their main contribution to the project 
 
-Onur Arıkan — ...
-
-Thomas Guffroy  — ...
-
-Margarita Makurina — ...
-
-Umut Özer — ...
 
