@@ -77,7 +77,7 @@ The features extracted are:
 **Learning the visitor's taste.** A thumbs-up or thumbs-down adjusts a persistent per-painting score that biases future selection. It is saved between sessions and can be reset live (the `R` key). The OK sign is reserved for toggling particle mode and no longer affects taste.
 
 ## c) Visuals generation (Processing)
-`painting_visualizer/painting_visualizer.pde` turns the selected painting into a particle system: each particle is seeded from a painting pixel and steered by the painting's brightness-gradient field plus Perlin noise turbulence. An OK gesture toggles a particle follow mode in which the hand pushes, scatters, and regroups the particles. A subtle brownian jitter keeps the image alive even when no one is interacting. The sketch also renders the artwork itself and lets it slowly dissolve into its own particles.
+`painting_visualizer/painting_visualizer.pde` turns the selected painting into a particle system: each particle is seeded from a painting pixel and steered by the painting's brightness-gradient field. An OK gesture toggles a particle follow mode in which the hand pushes, scatters, and regroups the particles. A subtle brownian jitter keeps the image alive even when no one is interacting. The sketch also renders the artwork itself and lets it slowly dissolve into its own particles.
 
 ## d) Sound generation (SuperCollider)
 `audio_playback/SC_mood_reactive.scd` (with `calm_synthdefs.scd`) is a fully synthesis based sound engine. Each of the five soundscapes has its traits, chosen by painting style and continuously shaped by valence and arousal. A palm-driven voice tracks the hand, gesture accents and everything crossfades smoothly as paintings and moods change.
